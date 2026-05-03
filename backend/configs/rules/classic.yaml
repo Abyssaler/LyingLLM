@@ -1,0 +1,45 @@
+name: "经典狼人杀"
+version: "1.0"
+phases:
+  night_order: [guard, werewolf, witch, seer]
+  day_order: [announce, discuss, vote, execute]
+  enable_sheriff: true
+  enable_last_words: true
+  enable_wolf_discuss: true
+  day_speech_order: sheriff_choose_or_random_clockwise
+voting:
+  type: majority
+  tie_handling: revote
+  max_revote_rounds: 2
+  final_tie_resolution: no_elimination
+  allow_abstain: true
+  sheriff_vote_weight: 1.5
+win_conditions:
+  wolves_eliminated: "好人阵营胜利"
+  wolves_equal_villagers: "狼人阵营胜利"
+roles:
+  werewolf: {min: 2, max: 4}
+  seer: {min: 1, max: 1}
+  witch: {min: 1, max: 1}
+  hunter: {min: 0, max: 1}
+  guard: {min: 0, max: 1}
+  villager: {min: 0, max: 99}
+special_rules:
+  witch_can_self_save: false
+  hunter_can_shoot_on_witch_kill: true
+  guard_cannot_guard_same_twice: true
+  guard_blocks_wolf_kill: true
+  witch_save_blocks_wolf_kill: true
+  guard_witch_same_target_dies: true
+  merge_death_causes: true
+  first_night_has_last_words: true
+  mvp_include_dead_players: true
+  sheriff_can_transfer: true
+logs:
+  split_day_night: true
+  night_log_visibility: observer_only
+  event_sourcing: true
+memory_compression:
+  enabled: false
+  threshold_rounds: 5
+  strategy: summarize

@@ -1,0 +1,69 @@
+name: "LLM Provider 配置"
+version: "1.0"
+description: "支持的 LLM 提供商及其默认模型配置"
+
+providers:
+  openai:
+    adapter: openai
+    base_url: "${OPENAI_BASE_URL}"
+    api_key: "${OPENAI_API_KEY}"
+    default_model: "gpt-4o"
+    models:
+      - name: "gpt-4o"
+        max_tokens: 4096
+        supports_streaming: true
+        supports_json_mode: true
+      - name: "gpt-4o-mini"
+        max_tokens: 4096
+        supports_streaming: true
+        supports_json_mode: true
+      - name: "gpt-3.5-turbo"
+        max_tokens: 4096
+        supports_streaming: true
+        supports_json_mode: true
+
+  anthropic:
+    adapter: claude
+    base_url: "${ANTHROPIC_BASE_URL}"
+    api_key: "${ANTHROPIC_API_KEY}"
+    default_model: "claude-3-5-sonnet-20241022"
+    models:
+      - name: "claude-3-5-sonnet-20241022"
+        max_tokens: 4096
+        supports_streaming: true
+        supports_json_mode: false
+      - name: "claude-3-5-haiku-20241022"
+        max_tokens: 4096
+        supports_streaming: true
+        supports_json_mode: false
+
+  deepseek:
+    adapter: openai
+    base_url: "https://api.deepseek.com/v1"
+    api_key: "${DEEPSEEK_API_KEY}"
+    default_model: "deepseek-chat"
+    models:
+      - name: "deepseek-chat"
+        max_tokens: 4096
+        supports_streaming: true
+        supports_json_mode: true
+      - name: "deepseek-reasoner"
+        max_tokens: 4096
+        supports_streaming: true
+        supports_json_mode: true
+
+default_provider: openai
+default_model: gpt-4o
+
+retry:
+  max_retries: 3
+  retry_on_parse_error: true
+  retry_on_validation_error: true
+  retry_on_timeout: true
+  retry_on_rate_limit: true
+  fallback_model: null
+
+judge:
+  provider: openai
+  model: gpt-4o
+  personality: "strict"
