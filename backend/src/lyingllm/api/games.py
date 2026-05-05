@@ -22,6 +22,7 @@ class _ReasoningConfigIn(BaseModel):
 
 
 class _ModelConfigIn(BaseModel):
+    model_config = {"populate_by_name": True}
     provider_id: str
     model_id: str
     display_name: str | None = None
@@ -129,7 +130,7 @@ async def step_game(game_id: str) -> dict:
     runner = svc.get(game_id)
     if runner is None:
         raise HTTPException(status_code=404, detail="Game not found")
-    ended = runner.step()
+    ended = await runner.step()
     svc.notify(game_id)
     return {"ended": ended}
 

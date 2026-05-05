@@ -78,7 +78,7 @@ class GameService:
         runner = self._games.get(game_id)
         if runner is None:
             return
-        while not runner.step():
+        while not await runner.step():
             self.notify(game_id)
             await asyncio.sleep(0.01)  # tiny yield so WS can push
         self.notify(game_id)

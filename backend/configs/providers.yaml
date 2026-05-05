@@ -1,0 +1,82 @@
+providers:
+  - id: mock
+    display_name: Mock (Stub)
+    adapter: mock
+    models:
+      - id: mock-default
+        display_name: Mock Default
+        capabilities:
+          structured_output: true
+          json_mode: true
+          tool_calling: false
+          reasoning_summary: false
+          reasoning_content: false
+          encrypted_reasoning: false
+          reasoning_effort: false
+          max_context_tokens: 4096
+        defaults:
+          temperature: 0.7
+          top_p: 0.9
+          max_output_tokens: 2000
+
+  - id: openai
+    display_name: OpenAI
+    adapter: openai
+    base_url_env: OPENAI_BASE_URL
+    api_key_env: OPENAI_API_KEY
+    models:
+      - id: gpt-4o-mini
+        display_name: GPT-4o Mini
+        capabilities:
+          structured_output: true
+          json_mode: true
+          tool_calling: true
+          reasoning_summary: false
+          reasoning_content: false
+          encrypted_reasoning: false
+          reasoning_effort: false
+          max_context_tokens: 128000
+        defaults:
+          temperature: 0.7
+          top_p: 0.9
+          max_output_tokens: 2000
+
+  - id: deepseek
+    display_name: DeepSeek
+    adapter: deepseek
+    base_url_env: DEEPSEEK_BASE_URL
+    api_key_env: DEEPSEEK_API_KEY
+    models:
+      - id: deepseek-v4-flash
+        display_name: DeepSeek V4 Flash
+        capabilities:
+          structured_output: true
+          json_mode: true
+          tool_calling: false
+          reasoning_summary: true
+          reasoning_content: true
+          encrypted_reasoning: false
+          reasoning_effort: false
+          max_context_tokens: 64000
+        defaults:
+          temperature: 0.7
+          top_p: 0.9
+          max_output_tokens: 2000
+          reasoning_capture: auto
+
+      - id: deepseek-chat
+        display_name: DeepSeek Chat
+        capabilities:
+          structured_output: true
+          json_mode: true
+          tool_calling: false
+          reasoning_summary: true
+          reasoning_content: true
+          encrypted_reasoning: false
+          reasoning_effort: false
+          max_context_tokens: 64000
+        defaults:
+          temperature: 0.7
+          top_p: 0.9
+          max_output_tokens: 2000
+          reasoning_capture: auto

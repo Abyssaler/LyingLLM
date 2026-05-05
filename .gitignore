@@ -24,3 +24,15 @@ mind.txt
 # Logs
 logs/
 *.log
+
+# Ralph harness companion files (prd.json / progress.txt are runtime state)
+scripts/ralph/prd.json
+scripts/ralph/progress.txt
+scripts/ralph/archive/
+.ralph/
+
+# Local test/run artifacts
+backend/data/
+backend/.pytest_cache/
+.pytest_cache/
+*.snap

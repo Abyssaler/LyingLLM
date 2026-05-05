@@ -1,4 +1,0 @@
-runtime:
-  max_output_tokens: 2000
-  default_timeout_seconds: 30
-  default_retry_limit: 2

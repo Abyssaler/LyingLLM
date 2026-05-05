@@ -5,13 +5,14 @@ Maps provider IDs to instantiated adapters.
 
 from __future__ import annotations
 
-from lyingllm.llm.adapters import MockAdapter, ProviderAdapter
+from lyingllm.llm.adapters import MockAdapter, DeepSeekAdapter, ProviderAdapter
 
 
 class AdapterRegistry:
     def __init__(self) -> None:
         self._adapters: dict[str, ProviderAdapter] = {
             "mock": MockAdapter(),
+            "deepseek": DeepSeekAdapter(),
         }
 
     def get(self, provider_id: str) -> ProviderAdapter | None:

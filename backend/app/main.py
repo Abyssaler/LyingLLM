@@ -4,12 +4,28 @@ Only assembles routers and middleware — all business logic lives in
 ``lyingllm``.
 """
 
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from lyingllm.config.loader import load_providers_catalog
+
+
+def _load_dotenv_walking_up() -> None:
+    """Walk up from this file looking for a `.env` and load it if found."""
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / ".env"
+        if candidate.exists():
+            from dotenv import load_dotenv
+            load_dotenv(candidate)
+            return
+
+
+_load_dotenv_walking_up()
 
 
 @asynccontextmanager
