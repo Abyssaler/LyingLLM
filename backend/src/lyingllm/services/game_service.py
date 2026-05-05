@@ -31,6 +31,27 @@ class GameService:
     def list_ids(self) -> list[str]:
         return list(self._games.keys())
 
+    def list_all(self) -> list[dict]:
+        """Return summary of all games for History page."""
+        result = []
+        for gid, runner in self._games.items():
+            s = runner.state
+            winner = None
+            if s.phase.value == "game_end":
+                end_events = [e for e in runner.events.all_events() if e.event_type == "game_end"]
+                if end_events:
+                    winner = end_events[0].data.get("winner")
+            result.append({
+                "game_id": gid,
+                "phase": s.phase.value,
+                "round_no": s.round_no,
+                "alive_count": len(s.alive_players),
+                "death_count": sum(1 for p in s.players if not p.alive),
+                "winner": winner,
+                "created_at": runner.events.all_events()[0].timestamp if runner.events.all_events() else None,
+            })
+        return result
+
     def delete(self, game_id: str) -> None:
         self._games.pop(game_id, None)
         self._tasks.pop(game_id, None)

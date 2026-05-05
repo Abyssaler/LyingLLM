@@ -134,27 +134,42 @@ async def step_game(game_id: str) -> dict:
     return {"ended": ended}
 
 
+@router.get("")
+async def list_games() -> list[dict]:
+    svc = get_game_service()
+    return svc.list_all()
+
+
 @router.get("/{game_id}")
-async def get_game(game_id: str) -> GameSummaryOut:
+async def get_game(game_id: str) -> dict:
     svc = get_game_service()
     runner = svc.get(game_id)
     if runner is None:
         raise HTTPException(status_code=404, detail="Game not found")
     s = runner.state
-    # Determine winner if game ended
     winner = None
     if s.phase.value == "game_end":
         end_events = [e for e in runner.events.all_events() if e.event_type == "game_end"]
         if end_events:
             winner = end_events[0].data.get("winner")
-    return GameSummaryOut(
-        game_id=s.game_id,
-        phase=s.phase.value,
-        round_no=s.round_no,
-        alive_count=len(s.alive_players),
-        death_count=sum(1 for p in s.players if not p.alive),
-        winner=winner,
-    )
+    return {
+        "game_id": s.game_id,
+        "phase": s.phase.value,
+        "round_no": s.round_no,
+        "alive_count": len(s.alive_players),
+        "death_count": sum(1 for p in s.players if not p.alive),
+        "winner": winner,
+        "players": [
+            {
+                "id": p.id,
+                "role": p.role.value,
+                "faction": p.faction.value,
+                "alive": p.alive,
+                "is_sheriff": p.is_sheriff,
+            }
+            for p in s.players
+        ],
+    }
 
 
 @router.get("/{game_id}/events")

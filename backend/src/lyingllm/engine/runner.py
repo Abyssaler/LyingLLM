@@ -153,6 +153,19 @@ class GameRunner:
             ["observer"],
         )
 
+    def _emit_reasoning(self, player_id: int, action: str, content: str) -> None:
+        self._emit(
+            "reasoning_trace",
+            {
+                "mode": "self_explanation",
+                "player_id": player_id,
+                "action": action,
+                "content": content,
+            },
+            ["observer", f"player:{player_id}"],
+            player_id=player_id,
+        )
+
     def _alive_ids(self) -> set[int]:
         return {p.id for p in self.state.players if p.alive}
 
@@ -213,6 +226,8 @@ class GameRunner:
         if guard:
             guard.last_guard_target = action.target
         self._emit("night_action", action.to_dict(), ["observer"], player_id=guard.id if guard else None)
+        if guard:
+            self._emit_reasoning(guard.id, "guard", "守卫选择空守，观察今晚局势。")
         self._transition(Phase.WOLF_DISCUSS)
 
     def _handle_wolf_discuss(self) -> None:
@@ -228,6 +243,7 @@ class GameRunner:
                 action.to_dict(),
                 ["wolves", "observer"],
             )
+            self._emit_reasoning(wolves[0].id, "wolf_vote_kill", f"狼人讨论后决定击杀玩家{action.target}。")
         self._transition(Phase.WITCH_ACTION)
 
     def _handle_witch_action(self) -> None:
@@ -243,6 +259,15 @@ class GameRunner:
         self.state.night_actions.witch_save_used = action.use_save
         self.state.night_actions.witch_poison_target = action.poison_target
         self._emit("night_action", action.to_dict(), ["observer"], player_id=witch.id if witch else None)
+        if witch:
+            reason = ""
+            if action.use_save:
+                reason = f"女巫使用解药救起玩家{self.state.night_actions.wolf_kill_target}。"
+            elif action.poison_target:
+                reason = f"女巫使用毒药毒杀玩家{action.poison_target}。"
+            else:
+                reason = "女巫选择观望，不使用任何药品。"
+            self._emit_reasoning(witch.id, "witch", reason)
         self._transition(Phase.SEER_ACTION)
 
     def _handle_seer_action(self) -> None:
@@ -254,6 +279,9 @@ class GameRunner:
             seer.checked_players.add(action.target)
         self.state.night_actions.seer_check_target = action.target
         self._emit("night_action", action.to_dict(), ["observer"], player_id=seer.id if seer else None)
+        if seer:
+            result = "狼人" if (self.state.get_player(action.target) and self.state.get_player(action.target).faction.value == "wolf") else "好人"
+            self._emit_reasoning(seer.id, "seer", f"预言家查验玩家{action.target}，结果为{result}阵营。")
         self._transition(Phase.NIGHT_RESOLVE)
 
     def _handle_night_resolve(self) -> None:
@@ -326,6 +354,8 @@ class GameRunner:
             {"ballots": ballots, "type": "sheriff"},
             ["public", "observer"],
         )
+        for v, target in ballots.items():
+            self._emit_reasoning(v, "vote", f"在警长竞选中投票给玩家{target}。")
         self._transition(Phase.SHERIFF_RESULT)
 
     def _handle_sheriff_result(self) -> None:
@@ -497,6 +527,7 @@ class GameRunner:
                     ["public", "observer"],
                     player_id=speaker_id,
                 )
+                self._emit_reasoning(speaker_id, "speech", "经过思考，选择暂时不发表具体观点，继续观察局势。")
                 # Check self-destruct (stub: never happens)
                 break
         else:
@@ -527,6 +558,9 @@ class GameRunner:
             {"ballots": ballots, "type": "exile"},
             ["public", "observer"],
         )
+        for pid, target in ballots.items():
+            reason = f"投票给玩家{target}。" if target != "abstain" else "选择弃票，继续观察。"
+            self._emit_reasoning(pid, "vote", reason)
         self._transition(Phase.VOTE_RESULT)
 
     def _handle_vote_result(self) -> None:
