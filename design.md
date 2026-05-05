@@ -29,6 +29,167 @@
 | 存储 | JSONL/JSON 文件 | 事件日志、快照、原始模型响应引用 |
 | 配置 | YAML | provider、模型和运行参数 |
 
+## 2.1 模型配置与兼容方案
+
+前端在游戏开始前必须允许观赛者为 12 个玩家分别选择模型、人格和 reasoning 展示策略。后端以 provider 能力注册表做兼容层，前端只读取后端暴露的 provider/model/capability 元数据，不硬编码各厂商 API 差异。
+
+### 2.1.1 Provider 注册表
+
+`configs/providers.yaml` 只保存非敏感元数据和环境变量名，不保存 API key。
+
+```yaml
+providers:
+  openai:
+    display_name: OpenAI
+    adapter: openai_responses
+    base_url_env: OPENAI_BASE_URL
+    api_key_env: OPENAI_API_KEY
+    models:
+      - id: gpt-5.5
+        display_name: GPT-5.5
+        capabilities:
+          structured_output: true
+          reasoning_summary: true
+          reasoning_content: false
+          encrypted_reasoning: true
+        defaults:
+          temperature: 0.7
+          max_output_tokens: 2000
+          reasoning_effort: medium
+          reasoning_capture: summary
+  openai_compatible:
+    display_name: OpenAI Compatible
+    adapter: openai_chat_compatible
+    base_url_env: CUSTOM_OPENAI_BASE_URL
+    api_key_env: CUSTOM_OPENAI_API_KEY
+    models: []
+```
+
+Provider 注册表字段：
+
+```python
+class ProviderConfig:
+    id: str
+    display_name: str
+    adapter: ProviderAdapterKind
+    base_url_env: str | None
+    api_key_env: str
+    models: list[ModelCatalogItem]
+
+class ModelCatalogItem:
+    id: str
+    display_name: str
+    capabilities: ModelCapabilities
+    defaults: ModelDefaults
+
+class ModelCapabilities:
+    structured_output: bool
+    json_mode: bool
+    tool_calling: bool
+    reasoning_summary: bool
+    reasoning_content: bool
+    encrypted_reasoning: bool
+    reasoning_effort: bool
+    max_context_tokens: int | None
+
+class ModelDefaults:
+    temperature: float | None
+    top_p: float | None
+    max_output_tokens: int
+    reasoning_effort: str | None
+    reasoning_capture: str
+```
+
+### 2.1.2 玩家模型配置
+
+每个玩家在创建游戏前都必须有独立 `ModelConfig`。同一局中 12 个玩家可以使用不同 provider 和 model。
+
+```python
+class ModelConfig:
+    provider_id: str
+    model_id: str
+    display_name: str
+    persona: str | None
+    temperature: float | None
+    top_p: float | None
+    max_output_tokens: int
+    timeout_seconds: int
+    retry_limit: int
+    reasoning: ReasoningConfig
+
+class ReasoningConfig:
+    enabled: bool
+    effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None
+    capture: Literal["off", "summary", "full", "usage_only", "auto"]
+    show_to_observer: bool
+    show_to_self: bool
+    persist_raw_response: bool
+```
+
+### 2.1.3 启动前校验
+
+创建游戏前，后端必须执行配置校验：
+
+- 12 个玩家均已配置 provider 和 model。
+- provider 已注册且 adapter 存在。
+- provider 对应 API key 环境变量存在；前端只显示“已配置/未配置”，不显示密钥。
+- reasoning 设置不得超过模型能力：例如不支持 `reasoning_summary` 的模型不能强制 `capture: summary`。
+- 若模型不支持结构化输出，adapter 必须启用 JSON prompt + parser 重试策略。
+- 每个玩家配置落入运行限制：超时、重试次数、`max_output_tokens` 不超过系统上限。
+
+校验结果返回给前端：
+
+```python
+class SetupValidationResult:
+    ok: bool
+    errors: list[SetupValidationIssue]
+    warnings: list[SetupValidationIssue]
+
+class SetupValidationIssue:
+    player_id: int | None
+    provider_id: str | None
+    model_id: str | None
+    code: str
+    message: str
+```
+
+### 2.1.4 Adapter 兼容策略
+
+所有 provider adapter 向上暴露同一个接口：
+
+```python
+class ProviderAdapter:
+    async def generate(self, request: LLMRequest) -> LLMResponse: ...
+
+class LLMRequest:
+    provider_id: str
+    model_id: str
+    messages: list[LLMMessage]
+    output_schema: dict
+    temperature: float | None
+    top_p: float | None
+    max_output_tokens: int
+    reasoning: ReasoningConfig
+    timeout_seconds: int
+
+class LLMResponse:
+    text: str
+    parsed_json: dict | None
+    reasoning_trace: ReasoningTrace | None
+    usage: TokenUsage
+    raw_ref: str | None
+```
+
+Adapter 责任：
+
+- 把统一 `LLMRequest` 转成 provider 原生 API 参数。
+- 优先使用 provider 原生结构化输出；不支持时使用 JSON prompt 并交给 parser 校验。
+- 按 provider 能力采集 `reasoning_trace`。
+- 归一化错误、超时、限流和 token usage。
+- 不在 adapter 中实现游戏规则。
+
+前端只操作 `ModelConfig` 和 catalog 元数据，不直接理解 OpenAI、Claude、Gemini、DeepSeek、Qwen 的请求差异。
+
 ## 3. 代码结构
 
 后端采用 `src` layout。`app` 只作为 FastAPI 启动层，不承载规则、引擎、Agent、LLM、存储等功能代码。可复用业务代码统一放在 `src/lyingllm/` 包内，测试直接面向该包。
@@ -45,10 +206,13 @@ LyingLLM/
 │   │       ├── api/
 │   │       │   ├── deps.py       # API 依赖注入
 │   │       │   ├── games.py      # REST 路由
+│   │       │   ├── providers.py  # provider/model catalog API
+│   │       │   ├── setup.py      # 创建游戏前配置校验 API
 │   │       │   └── ws.py         # WebSocket 路由
 │   │       ├── config/
 │   │       │   ├── settings.py   # 环境变量与运行配置
-│   │       │   └── loader.py     # YAML 配置加载
+│   │       │   ├── loader.py     # YAML 配置加载
+│   │       │   └── providers.py  # provider/model catalog
 │   │       ├── domain/
 │   │       │   ├── models/
 │   │       │   │   ├── game.py
@@ -71,8 +235,10 @@ LyingLLM/
 │   │       ├── llm/
 │   │       │   ├── client.py
 │   │       │   ├── adapters.py
+│   │       │   ├── registry.py   # adapter 注册与能力匹配
 │   │       │   └── reasoning.py  # reasoning_trace 归一化
 │   │       ├── services/
+│   │       │   ├── setup_service.py # 模型配置校验
 │   │       │   ├── game_service.py  # API 用例编排
 │   │       │   └── mvp_service.py   # MVP 裁判任务
 │   │       └── storage/
@@ -138,6 +304,21 @@ class GameState:
 ```
 
 Agent 不作为常驻会话进程存在。系统只在玩家轮到行动时构造一次 `AgentInvocation`，读取该玩家可见事件和必要记忆，调用模型生成动作，写入事件后释放运行上下文。
+
+### 4.2.1 GameSetupConfig
+
+```python
+class GameSetupConfig:
+    players: list[PlayerSetupConfig]  # 长度固定为 12
+    runtime: RuntimeConfig
+
+class PlayerSetupConfig:
+    player_id: int                    # 1..12
+    display_name: str | None
+    model_config: ModelConfig
+```
+
+`GameSetupConfig` 是 `POST /api/games` 的核心输入。角色分配仍由后端按固定 12 人规则处理，前端只配置每个座位使用哪个模型和 reasoning 策略。
 
 ### 4.3 NightActionSet
 
@@ -513,6 +694,8 @@ class GameEvent:
 | `GET` | `/api/games/{id}/log` | 完整日志 |
 | `GET` | `/api/games/{id}/reasoning/{player_id}` | 指定玩家推理摘要 |
 | `GET` | `/api/games/{id}/mvp` | MVP 结果 |
+| `GET` | `/api/providers` | 获取 provider/model catalog 和能力元数据 |
+| `POST` | `/api/setup/validate` | 校验 12 个玩家的模型配置 |
 
 ### 11.2 WebSocket
 
@@ -544,12 +727,16 @@ MVP 失败不影响游戏结果。
 
 页面：
 
-- `Setup`：选择 12 个玩家的模型、人格、是否启用 reasoning 展示。
+- `Setup`：为 12 个座位分别选择 provider、model、人格、temperature、超时、重试次数、reasoning effort 和 reasoning capture，并在开始前执行兼容性校验。
 - `Game`：实时观战，显示玩家身份、存活状态、发言、投票、夜间行动和推理摘要。
 - `History`：读取日志并回放。
 
 核心组件：
 
+- 模型配置表：12 行玩家座位，每行独立 provider/model/reasoning 配置，支持复制配置到全部座位。
+- Provider 状态：显示 provider API key 是否已在后端环境中配置，禁止在前端输入或展示密钥。
+- 能力提示：根据 catalog 标记模型是否支持结构化输出、reasoning summary、reasoning_content、encrypted reasoning。
+- 启动校验面板：展示 `/api/setup/validate` 返回的错误和警告，错误未解决时不能开始游戏。
 - 玩家座位区：12 个固定座位。
 - 中央事件流：展示当前阶段、发言、投票、死亡、遗言。
 - 夜间面板：观赛者可见夜间行动和结算。

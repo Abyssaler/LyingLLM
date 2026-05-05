@@ -85,9 +85,11 @@ LyingLLM/
 - `backend/src/lyingllm/__init__.py`
 - `backend/src/lyingllm/config/settings.py`
 - `backend/src/lyingllm/config/loader.py`
+- `backend/src/lyingllm/config/providers.py`
 - `configs/providers.yaml`
 - `configs/runtime.yaml`
 - `backend/tests/unit/test_imports.py`
+- `backend/tests/unit/test_provider_catalog.py`
 
 ### 2.3 实现要求
 
@@ -95,12 +97,15 @@ LyingLLM/
 - 后端可通过 `uvicorn app.main:app` 或等效方式启动。
 - 配置支持 YAML 文件和环境变量覆盖。
 - API key 只从环境变量读取，不写入日志。
+- `providers.yaml` 只保存 provider/model 元数据和环境变量名，不保存密钥。
+- 后端能加载 provider/model catalog，并暴露模型能力。
 
 ### 2.4 验收标准
 
 - `pytest` 能运行。
 - FastAPI `/health` 返回健康状态。
 - 导入 `lyingllm` 不触发 provider 初始化或网络请求。
+- provider catalog 可加载，缺失 API key 时只返回“未配置”状态，不抛出启动异常。
 
 ## 3. 阶段二：领域模型与规则常量
 
@@ -131,6 +136,13 @@ LyingLLM/
 - `DeathRecord`
 - `GameEvent`
 - `ReasoningTrace`
+- `ModelConfig`
+- `ReasoningConfig`
+- `ProviderConfig`
+- `ModelCatalogItem`
+- `ModelCapabilities`
+- `GameSetupConfig`
+- `SetupValidationResult`
 
 ### 3.4 规则常量
 
@@ -156,6 +168,7 @@ LyingLLM/
 - `NightActionSet.wolf_kill_target` 必填。
 - 所有模型可 JSON 序列化和反序列化。
 - 单元测试覆盖角色数量、阵营分组、胜负计数基础函数。
+- 单元测试覆盖 12 个玩家模型配置的序列化和校验错误结构。
 
 ## 4. 阶段三：动作 schema 与合法性校验
 
@@ -453,7 +466,7 @@ class GameEvent:
 
 ### 8.1 目标
 
-实现按行动窗口唤醒模型的 Agent 调用链。此阶段可先接 mock adapter，再接真实 provider。
+实现按行动窗口唤醒模型的 Agent 调用链，以及兼容多厂商模型的 provider adapter 层。此阶段可先接 mock adapter，再接真实 provider。
 
 ### 8.2 建议文件
 
@@ -462,9 +475,86 @@ class GameEvent:
 - `agents/parser.py`
 - `llm/client.py`
 - `llm/adapters.py`
+- `llm/registry.py`
 - `llm/reasoning.py`
+- `services/setup_service.py`
 - `backend/tests/unit/test_visible_context.py`
+- `backend/tests/unit/test_setup_validation.py`
+- `backend/tests/unit/test_provider_registry.py`
 - `backend/tests/unit/test_reasoning_trace.py`
+
+### 8.2.1 Provider Catalog
+
+实现 provider/model catalog，前端配置页只能使用该 catalog：
+
+```python
+class ProviderConfig:
+    id: str
+    display_name: str
+    adapter: str
+    base_url_env: str | None
+    api_key_env: str
+    models: list[ModelCatalogItem]
+
+class ModelCatalogItem:
+    id: str
+    display_name: str
+    capabilities: ModelCapabilities
+    defaults: ModelDefaults
+```
+
+能力字段至少包含：
+
+- `structured_output`
+- `json_mode`
+- `tool_calling`
+- `reasoning_summary`
+- `reasoning_content`
+- `encrypted_reasoning`
+- `reasoning_effort`
+- `max_context_tokens`
+
+### 8.2.2 Game Setup Config
+
+`POST /api/games` 必须接收 12 个玩家的模型配置：
+
+```python
+class GameSetupConfig:
+    players: list[PlayerSetupConfig]
+    runtime: RuntimeConfig
+
+class PlayerSetupConfig:
+    player_id: int
+    display_name: str | None
+    model_config: ModelConfig
+```
+
+校验要求：
+
+- `players` 长度必须为 12。
+- `player_id` 必须覆盖 1..12 且不可重复。
+- provider 已注册。
+- model 存在于 provider catalog，或 provider 明确允许自定义模型 id。
+- API key 环境变量存在。
+- reasoning capture 不得超过模型能力。
+- 不支持结构化输出的模型必须启用 JSON prompt + parser 重试策略。
+- 超时、重试、`max_output_tokens` 不得超过系统上限。
+
+### 8.2.3 Adapter 接口
+
+所有 provider adapter 只向上暴露统一接口：
+
+```python
+class ProviderAdapter:
+    async def generate(self, request: LLMRequest) -> LLMResponse: ...
+```
+
+Adapter 负责：
+
+- 把统一请求转成 provider 原生 API 参数。
+- 归一化文本输出、JSON 输出、token usage、错误、限流、超时。
+- 采集并归一化 `reasoning_trace`。
+- 不实现游戏规则。
 
 ### 8.3 AgentInvocation
 
@@ -523,6 +613,8 @@ agent_invocation_start
 - 同一事件在不同视图中的可见性符合 `rule.md`。
 - prompt 中不包含 observer-only 字段。
 - 模型输出非法时能重试并 fallback。
+- Setup 校验能阻止缺失 API key、未知 provider、未知 model、reasoning 能力不匹配。
+- registry 能按 `provider_id` 找到正确 adapter。
 
 ## 9. 阶段八：Reasoning Trace
 
@@ -578,14 +670,20 @@ class ReasoningTrace:
 
 - `api/deps.py`
 - `api/games.py`
+- `api/providers.py`
+- `api/setup.py`
 - `api/ws.py`
 - `services/game_service.py`
+- `services/setup_service.py`
 - `backend/tests/integration/test_api_games.py`
+- `backend/tests/integration/test_api_setup.py`
 - `backend/tests/integration/test_ws_events.py`
 
 ### 10.3 REST API
 
 - `POST /api/games`
+- `GET /api/providers`
+- `POST /api/setup/validate`
 - `POST /api/games/{id}/start`
 - `POST /api/games/{id}/step`
 - `POST /api/games/{id}/pause`
@@ -614,6 +712,8 @@ class ReasoningTrace:
 ### 10.5 验收标准
 
 - REST 能创建并 step 一局 stub game。
+- `/api/providers` 不返回 API key，只返回 provider/model/capability 和 key 配置状态。
+- `/api/setup/validate` 能返回按 player_id 定位的 errors / warnings。
 - WebSocket 断线重连能补发遗漏事件。
 - `/reasoning/{player_id}` 不返回其他玩家不可见内容。
 
@@ -641,13 +741,18 @@ class ReasoningTrace:
 
 ### 11.3 页面
 
-- `Setup`：配置 12 个玩家的 provider、model、人格、reasoning 展示策略。
+- `Setup`：配置 12 个玩家的 provider、model、人格、temperature、超时、重试次数、reasoning effort、reasoning capture，并在启动前校验。
 - `Game`：实时观战，展示玩家身份、存活状态、警长、发言、投票、夜间行动、推理摘要。
 - `History`：读取事件日志并回放。
 
 ### 11.4 组件要求
 
 - 玩家座位区固定 12 个座位。
+- Setup 页面使用 `/api/providers` 渲染 provider/model 选择器，不硬编码厂商列表。
+- 每个座位可独立配置模型，也支持复制某一座位配置到全部座位。
+- Provider 状态只显示 API key 是否已在后端环境中配置，不允许前端输入或展示密钥。
+- 模型能力提示要显示结构化输出、reasoning summary、reasoning_content、encrypted reasoning 支持情况。
+- 点击开始前必须调用 `/api/setup/validate`；存在 error 时禁用开始按钮，warning 可展示但不阻止。
 - 玩家卡片显示 `idle`、`thinking`、`speaking`、`acted`、`error`。
 - 中央事件流显示当前阶段、公开发言、投票、死亡、遗言。
 - 夜间面板仅观赛者显示夜间行动和结算。
@@ -657,6 +762,8 @@ class ReasoningTrace:
 ### 11.5 验收标准
 
 - 前端能创建并观看一局 stub game。
+- Setup 可为 12 个座位选择不同 provider/model/reasoning 配置。
+- Setup 能展示缺失 API key、模型不支持所选 reasoning capture 等校验错误。
 - WebSocket 实时更新玩家状态和事件流。
 - 推理面板不会把 `self_explanation` 显示成真实内部思考。
 - 移动和桌面布局不重叠，12 个座位可扫描。
@@ -775,4 +882,3 @@ class ReasoningTrace:
 10. 前端观战页。
 11. MVP 裁判。
 12. 端到端测试与稳定性。
-
