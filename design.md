@@ -1,985 +1,415 @@
-# LyingLLM 整体框架设计
+# LyingLLM 项目设计
 
-## 技术选型
+本项目是一个 12 人标准狼人杀模拟与观战系统。系统让 12 个 LLM Agent 按固定规则进行一局狼人杀，人类以观赛者视角查看全局信息、公开发言、投票、夜间行动和模型推理摘要。
 
-| 层       | 技术                      | 说明                                         |
-| -------- | ------------------------- | -------------------------------------------- |
-| 后端     | FastAPI + Pydantic        | 异步API、模型验证                            |
-| LLM调用  | 多格式适配器              | OpenAI兼容/Claude原生/Token Plan等，统一调度 |
-| 前端     | React + TypeScript + Vite | 轻量现代前端                                 |
-| 实时通信 | WebSocket (FastAPI原生)   | 游戏过程实时推送                             |
-| 配置     | YAML                      | 角色、规则、模型配置                         |
-| 日志存储 | JSON 文件                 | 简单可移植，后续可换DB                       |
+规则事实以 [rule.md](./rule.md) 为唯一来源。本文只定义如何把这些规则做成项目。
 
-## 项目结构
+## 1. 项目目标
 
-```
+- 固定支持 12 人标准局：预言家、女巫、猎人、守卫、4 村民、3 普通狼人、白狼王。
+- 后端负责真实状态、规则校验、阶段推进、胜负判定和日志。
+- LLM Agent 只负责在自己可见信息范围内发言和行动。
+- 前端负责观战、回放、调试和展示模型行为。
+
+非目标：
+
+- 不支持动态人数。
+- 不支持自定义角色组合。
+- 不让 Agent 自行判定胜负或修改游戏状态。
+- 不把观赛者信息泄露给 Agent。
+
+## 2. 技术选型
+
+| 层 | 技术 | 用途 |
+| --- | --- | --- |
+| 后端 | FastAPI + Pydantic | API、WebSocket、规则模型和状态校验 |
+| 引擎 | Python async | 串行推进游戏阶段，调度 LLM 调用 |
+| LLM | Provider Adapter | 适配 OpenAI、Claude、Gemini、DeepSeek、Qwen 等接口 |
+| 前端 | React + TypeScript + Vite | 观战界面、日志回放、配置模型 |
+| 存储 | JSONL/JSON 文件 | 事件日志、快照、原始模型响应引用 |
+| 配置 | YAML | provider、模型和运行参数 |
+
+## 3. 代码结构
+
+后端采用 `src` layout。`app` 只作为 FastAPI 启动层，不承载规则、引擎、Agent、LLM、存储等功能代码。可复用业务代码统一放在 `src/lyingllm/` 包内，测试直接面向该包。
+
+```text
 LyingLLM/
-├── app/
-│   ├── main.py                  # FastAPI 入口
-│   ├── config/
+├── backend/
+│   ├── app/
 │   │   ├── __init__.py
-│   │   ├── settings.py          # 全局配置
-│   │   └── loader.py            # YAML 加载器
-│   ├── core/
-│   │   ├── __init__.py
-│   │   ├── engine.py            # 游戏引擎：主循环、阶段调度
-│   │   ├── state.py             # 游戏状态机
-│   │   ├── phase.py             # 阶段定义与转换
-│   │   └── event_bus.py          # 事件总线（解耦通信）
-│   ├── models/
-│   │   ├── __init__.py
-│   │   ├── game.py               # 对局模型
-│   │   ├── player.py            # 玩家模型
-│   │   ├── role.py              # 角色定义模型
-│   │   └── event.py             # 事件/日志模型
-│   ├── roles/
-│   │   ├── __init__.py
-│   │   ├── base.py              # 角色基类（含技能接口）
-│   │   ├── werewolf.py
-│   │   ├── villager.py
-│   │   ├── seer.py
-│   │   ├── witch.py
-│   │   ├── hunter.py
-│   │   └── guard.py
-│   ├── agents/
-│   │   ├── __init__.py
-│   │   ├── base.py              # Agent 基类（人格+思维+记忆）
-│   │   ├── prompts.py           # Prompt 模板构建器
-│   │   ├── parser.py            # 输出解析与校验器
-│   │   ├── personality.py       # 人格特质定义
-│   │   └── judge.py             # 裁判 AI（MVP 评选）
-│   ├── llm/
-│   │   ├── __init__.py
-│   │   ├── client.py            # LLM 统一调度客户端
-│   │   ├── adapter.py           # 多格式适配器（OpenAI/Claude）
-│   │   ├── retry.py             # 重试与降级策略
-│   │   └── message.py           # 对话历史管理
-│   ├── rules/
-│   │   ├── __init__.py
-│   │   └── manager.py           # 规则管理器
-│   ├── memory/
-│   │   ├── __init__.py
-│   │   └── game_memory.py       # Agent游戏内记忆（公共+私有+阵营）
-│   ├── storage/
-│   │   ├── __init__.py
-│   │   └── game_log.py          # 对局日志持久化
-│   └── api/
-│       ├── __init__.py
-│       ├── game.py              # 对局相关API
-│       ├── config.py            # 配置相关API
-│       └── ws.py                # WebSocket 实时推送
-├── configs/
-│   ├── roles/
-│   │   └── classic.yaml         # 经典角色定义
-│   ├── rules/
-│   │   └── classic.yaml         # 经典规则集
-│   └── models/
-│       └── providers.yaml       # LLM provider 配置
-├── logs/                         # 对局日志目录
-├── tests/
-├── pyproject.toml
-├── requirements.txt
-├── .env.example                 # 环境变量模板
-├── frontend/
+│   │   └── main.py              # FastAPI app factory、CORS、路由挂载
 │   ├── src/
-│   │   ├── components/
-│   │   │   ├── PlayerCard.tsx        # 玩家配置卡片
-│   │   │   ├── ChatPanel.tsx         # 发言面板
-│   │   │   ├── VotePanel.tsx         # 投票面板
-│   │   │   ├── ThinkingViewer.tsx    # 思维过程查看器
-│   │   │   ├── NightOverlay.tsx      # 夜间视觉模式遮罩
-│   │   │   ├── CenterStage.tsx       # 中间信息展示区
-│   │   │   └── Timeline.tsx          # 事件时间线
-│   │   ├── pages/
-│   │   │   ├── Setup.tsx             # 对局配置页
-│   │   │   ├── Game.tsx              # 对局观看页
-│   │   │   └── History.tsx           # 历史记录页
-│   │   ├── hooks/
-│   │   │   └── useGame.ts            # WebSocket 与自动推进 Hook
-│   │   ├── store/
-│   │   │   └── gameStore.ts          # Zustand 状态管理
-│   │   ├── api/
-│   │   │   └── client.ts             # API + WebSocket 客户端
-│   │   ├── types/
-│   │   │   └── index.ts              # 前端类型定义
-│   │   ├── App.tsx
-│   │   ├── main.tsx
-│   │   └── index.css
-│   ├── package.json
-│   └── tsconfig.json
-├── OPERATION_MANUAL.md
-├── DEPLOYMENT_MANUAL.md
+│   │   └── lyingllm/
+│   │       ├── __init__.py
+│   │       ├── api/
+│   │       │   ├── deps.py       # API 依赖注入
+│   │       │   ├── games.py      # REST 路由
+│   │       │   └── ws.py         # WebSocket 路由
+│   │       ├── config/
+│   │       │   ├── settings.py   # 环境变量与运行配置
+│   │       │   └── loader.py     # YAML 配置加载
+│   │       ├── domain/
+│   │       │   ├── models/
+│   │       │   │   ├── game.py
+│   │       │   │   ├── player.py
+│   │       │   │   ├── action.py
+│   │       │   │   └── event.py
+│   │       │   └── rules/
+│   │       │       ├── constants.py   # 从 rule.md 固化出的规则常量
+│   │       │       └── validator.py   # 动作合法性校验
+│   │       ├── engine/
+│   │       │   ├── runner.py     # 游戏主循环
+│   │       │   ├── state.py      # GameState 与阶段状态
+│   │       │   ├── phases.py     # 阶段推进与转移
+│   │       │   ├── resolver.py   # 夜间结算、死亡队列、胜负判定
+│   │       │   └── event_bus.py  # 事件广播
+│   │       ├── agents/
+│   │       │   ├── player_agent.py  # Agent 状态、记忆、可见信息
+│   │       │   ├── prompts.py       # Prompt 构造
+│   │       │   └── parser.py        # JSON 输出解析
+│   │       ├── llm/
+│   │       │   ├── client.py
+│   │       │   ├── adapters.py
+│   │       │   └── reasoning.py  # reasoning_trace 归一化
+│   │       ├── services/
+│   │       │   ├── game_service.py  # API 用例编排
+│   │       │   └── mvp_service.py   # MVP 裁判任务
+│   │       └── storage/
+│   │           ├── event_log.py     # JSONL 事件流
+│   │           └── snapshots.py     # 状态快照
+│   ├── tests/
+│   │   ├── unit/
+│   │   └── integration/
+│   └── pyproject.toml
+├── configs/
+│   ├── providers.yaml
+│   └── runtime.yaml
+├── frontend/
+├── rule.md
 └── design.md
 ```
 
-## 核心架构
+目录边界：
 
-### 1. 游戏引擎 (`app/core/engine.py`)
+- `backend/app/`：只允许导入并组装 `lyingllm.*`，不写规则判断、状态变更和 LLM 调用逻辑。
+- `lyingllm/domain/`：纯领域模型和规则校验，不依赖 FastAPI、文件系统或 provider SDK。
+- `lyingllm/engine/`：唯一可以修改真实游戏状态的层，负责阶段推进和结算。
+- `lyingllm/agents/`：只负责可见上下文、prompt、输出解析，不直接改 `GameState`。
+- `lyingllm/llm/`：封装不同 provider API，向上暴露统一调用结果。
+- `lyingllm/services/`：连接 API、引擎、存储和后台任务，承载应用用例编排。
+- `lyingllm/storage/`：负责日志、快照和原始响应引用的持久化。
+- `frontend/`：独立前端项目，只通过 REST/WebSocket 访问后端。
 
-引擎是整个系统的调度中心，采用**阶段驱动**的异步循环：
+## 4. 核心数据模型
 
+### 4.1 Player
+
+```python
+class Player:
+    id: int                    # 1..12
+    role: RoleId               # seer / witch / hunter / guard / villager / werewolf / white_wolf_king
+    faction: Faction           # village / wolf
+    role_group: RoleGroup      # god / villager / wolf
+    alive: bool
+    is_sheriff: bool
+    model_config: ModelConfig
 ```
-Setup → Role Assignment → ┌─ Night Phase ─┐──→ Day Phase ──┐──→ Win Check
-                           │  (各角色依次行动) │  (讨论→投票→处决) │       │
-                           └────────────────┘───────────────┘───────┘
+
+注意：`alive_wolves` 必须统计 `werewolf` 和 `white_wolf_king`，不能只统计普通狼人。
+
+### 4.2 GameState
+
+```python
+class GameState:
+    game_id: str
+    phase: Phase
+    round_no: int
+    players: list[Player]
+    sheriff_id: int | None
+    badge_destroyed: bool
+    night_actions: NightActionSet
+    death_queue: list[DeathRecord]
+    public_memory: list[int]       # event_id list
+    private_memory: dict[int, list[int]]
+    wolf_memory: list[int]
 ```
 
-- **Night Phase**: 按优先级收集各角色夜间技能（守卫→狼人协商并确认击杀目标→女巫→预言家），所有意图提交后进入 DAWN 阶段统一结算
-- **DAWN Phase**: 统一结算夜间行动（计算死亡与技能结果）并公布昨夜死亡信息，职责合并了原 NIGHT_RESOLVE 和 ANNOUNCE_DEATHS
-- **Day Phase**: 遗言 → 胜负检查 → 确定发言顺序 → 依次发言 → 投票 → 处决 / 平票重投处理
-- **Win Check**: 每次死亡结算、处决、死亡触发技能结束后检查胜负条件
-
-#### 1.1 夜间行动收集与结算
-
-夜间阶段区分**行动收集**和**结果结算**。角色在自己的行动窗口内只提交意图，不能直接修改玩家生死状态；所有夜间动作在 `NIGHT_ACTIONS` 阶段收集完毕后，统一汇总为 `NightActionSet`，在 DAWN 阶段由引擎统一结算，不再有独立的 `NIGHT_RESOLVE` 阶段。
+### 4.3 NightActionSet
 
 ```python
 class NightActionSet:
-    round: int
+    round_no: int
     guard_target: int | None
     wolf_kill_target: int | None
-    witch_save_target: int | None
+    witch_save_used: bool
     witch_poison_target: int | None
     seer_check_target: int | None
 ```
 
-结算规则：
-
-1. 守卫守护目标先记录为保护状态，不立即产生公开结果。
-2. 狼人击杀目标记录为 `wolf_kill_target`。
-3. 女巫在规则允许时可获知当晚狼刀目标，并选择是否使用解药；毒药目标独立记录。
-4. 预言家查验结果只写入预言家私有记忆，不进入公开日志。
-5. 结算器根据规则同时计算狼刀、守护、解药、毒药的最终死亡列表。
-6. 猎人等死亡触发技能不在 DAWN 结算中直接执行，而是在死亡确认后进入 `ON_DEATH_SKILL` 状态。
-
-默认结算口径：
-
-| 场景 | 默认结果 | 可配置项 |
-| ---- | -------- | -------- |
-| 狼刀目标被守卫守护 | 不死亡 | `guard_blocks_wolf_kill` |
-| 狼刀目标被女巫解救 | 不死亡 | `witch_save_blocks_wolf_kill` |
-| 守卫和女巫同救同一狼刀目标 | 死亡 | `guard_witch_same_target_dies` |
-| 同一玩家同时被狼刀和毒药命中 | 死亡，死亡原因记录为多原因 | `merge_death_causes` |
-| 女巫毒杀猎人 | 是否可开枪由规则决定 | `hunter_can_shoot_on_witch_kill` |
-| 守卫连续两晚守同一人 | 默认不允许，非法动作触发重试或降级 | `guard_cannot_guard_same_twice` |
-
-夜间结算产出 `NightResolutionResult`，包含：
-
-- `deaths`: 最终死亡玩家列表
-- `death_causes`: 仅系统和上帝视角可见的死因
-- `private_results`: 预言家查验、女巫用药等只对指定 Agent 可见的结果
-- `public_announcement`: 天亮后对所有存活玩家公开的死亡公告
-
-### 2. 游戏状态机 (`app/core/state.py`)
-
-游戏状态机的完整状态转换图：
-
-```
-WAITING ──(start, enable_sheriff)──→ SHERIFF_ELECTION ──(elected)──→ NIGHT_BEGIN
-   │                                                                     ▲
-   └────(start, no_sheriff)──────────────────────────────────────────────┘
-
-NIGHT_BEGIN → WOLF_DISCUSS → NIGHT_ACTIONS → DAWN
-
-DAWN → LAST_WORDS(skip/done) → WIN_CHECK ──(no winner after night)──→ DISCUSS_ORDER
-          │                                      │
-          └──(has winner)──→ GAME_END            │
-                                                   ▼
-                                            DISCUSS_ORDER → DISCUSS → VOTE → VOTE_RESULT
-                                                                                │
-                                    ┌───────────────┼──────────────┐
-                                    │               │              │
-                               (majority)        (tie)      (all abstain)
-                                    │               │              │
-                                    ▼               ▼              ▼
-                                EXECUTE      TIE_SPEECH      NO_ELIMINATION ──→ WIN_CHECK
-                                    │               │
-                                    ▼               ▼
-                                LAST_WORDS    TIE_VOTE ──→ VOTE_RESULT
-                                    │
-                                    ▼
-                                ON_DEATH_SKILL ──→ WIN_CHECK
-                                    │                   │
-                              (has winner)──→ GAME_END   └──(no winner after day)──→ NIGHT_BEGIN
-
-任意运行中状态 ──(pause)──→ PAUSED ──(resume)──→ 原状态
-任意LLM动作状态 ──(parse/timeout/validation failed)──→ RETRY_OR_FALLBACK ──→ 原状态
-任意运行中状态 ──(manual stop/fatal error)──→ ABORTED
-```
-
-**平票重投流程**：`VOTE_RESULT` 判定平票后进入 `TIE_SPEECH` → `TIE_VOTE` → `VOTE_RESULT`。若重投后仍平票，再次进入重投循环；超过规则配置的最大重投轮次（`max_revote_rounds`，默认 2）后仍平票，按 `tie_handling` 配置决定最终结果（无人出局或随机淘汰一人）。
-
-**DAWN 阶段职责**：合并了原 `NIGHT_RESOLVE` 和 `ANNOUNCE_DEATHS` 的职责。DAWN 内部分两步执行：先 resolve（结算夜间行动，计算死亡与私有结果），再 announce（生成并广播死亡公告）。这两步对状态机表现为同一个 DAWN 状态，引擎内部按顺序执行。
-
-状态说明：
-
-| 状态                 | 说明                           | 内部子阶段 |
-| -------------------- | ------------------------------ | ---------- |
-| `WAITING`          | 等待玩家加入，配置对局         | — |
-| `SHERIFF_ELECTION` | 警长竞选阶段（可选）           | 竞选宣言 → 投票 → 结果公布；平票时重投 |
-| `NIGHT_BEGIN`      | 夜晚开始，切换视觉模式         | — |
-| `WOLF_DISCUSS`     | 狼人内部协商击杀目标           | 第一轮表决 → 计票 → 平票则简短说明+第二轮表决 → 仍未达成则随机 |
-| `NIGHT_ACTIONS`    | 各角色按优先级执行夜间技能     | 守卫 → 女巫（获知狼刀目标）→ 预言家；狼人击杀目标在 WOLF_DISCUSS 已确定 |
-| `DAWN`             | 天亮：结算夜间行动 + 公布死亡  | resolve（计算死亡与私有结果）→ announce（广播死亡公告） |
-| `LAST_WORDS`       | 出局玩家发表遗言               | 若多人死亡，按玩家编号从小到大依次发言 |
-| `WIN_CHECK`        | 检查胜负条件                   | — |
-| `DISCUSS_ORDER`    | 确定白天发言起点和发言顺序     | 若存活警长为 AI，需调用 LLM 让其选择起始发言玩家 |
-| `DISCUSS`          | 白天自由讨论                   | 按编号从起始玩家开始依次串行发言，引擎内部追踪当前发言者 |
-| `VOTE`             | 投票环节                       | 按编号依次投票，引擎内部追踪当前投票者 |
-| `VOTE_RESULT`      | 计算投票结果                   | 计票；多数决→EXECUTE，平票→TIE_SPEECH，全员弃票→NO_ELIMINATION |
-| `TIE_SPEECH`       | 平票玩家依次发言               | 仅得票数相同的玩家发言，按编号从小到大 |
-| `TIE_VOTE`         | 其他玩家对平票玩家重新投票     | 仅可在平票候选人中投票 |
-| `EXECUTE`          | 执行投票结果                   | — |
-| `ON_DEATH_SKILL`   | 死亡触发技能执行 + 警长移交警徽 | see below |
-| `GAME_END`         | 游戏结束                       | — |
-| `PAUSED`           | 对局暂停，保留当前状态         | — |
-| `RETRY_OR_FALLBACK`| LLM 输出失败后的重试或降级决策 | — |
-| `ABORTED`          | 手动终止或不可恢复错误         | — |
-
-**ON_DEATH_SKILL 子流程**：
-
-`ON_DEATH_SKILL` 阶段依次处理每个出局玩家的死亡触发效果，按顺序执行：
-
-1. **角色死亡技能**：若出局玩家具有死亡触发技能（如猎人开枪），调用 LLM 或按规则执行
-2. **警长移交警徽**：若出局玩家为警长且规则允许移交警徽（`sheriff_can_transfer: true`），该玩家额外选择一名存活玩家接受警徽；若为 AI 玩家则通过 LLM 调用选择
-
-当同一`ON_DEATH_SKILL` 阶段有多名玩家出局（如夜间死亡 + 处决死亡触发连锁），按出局顺序依次处理每位玩家。若玩家同时为猎人和警长，两个选择（开枪目标 + 警徽接收者）合并在一次 LLM 调用中完成。
-
-可选路径与异常路径：
-
-- 未启用警长时，开始游戏后直接进入 `NIGHT_BEGIN`。
-- 投票平票时进入 `TIE_SPEECH` → `TIE_VOTE` → `VOTE_RESULT`；重投仍平票时按规则配置的最终处理方式决定（无人出局或随机淘汰）。
-- 全员弃票时直接进入 `NO_ELIMINATION` → `WIN_CHECK`。
-- 处决、夜间死亡、猎人开枪等每次造成出局后都进入 `WIN_CHECK`；夜间后的无胜负流向白天讨论，白天后的无胜负流向下一夜。
-- LLM 超时、解析失败或动作非法时进入 `RETRY_OR_FALLBACK`，超过重试上限后使用规则配置的降级动作。
-- `PAUSED` 可从任意运行中状态进入，恢复时回到暂停前状态。
-
-### 3. Agent 系统 (`app/agents/base.py`)
-
-每个AI玩家是一个 Agent，核心结构：
-
-```
-Agent
-├── model_config    # LLM模型配置（provider, model_name, base_url, api_key）
-├── personality     # 人格特质（影响prompt风格）
-├── role            # 当前角色（游戏开始后分配）
-├── thinking_mode   # 是否开启思维链
-├── is_alive        # 是否存活
-├── memory          # 游戏内记忆（公共+私有+阵营）
-│   ├── public      # 公共记忆：所有玩家可见
-│   ├── private     # 私有记忆：仅自己可见
-│   └── faction     # 阵营记忆：仅同阵营队友可见（如狼人同伴信息、历史协商摘要）
-└── conversation    # 与LLM的对话历史
-```
-
-**记忆隔离**是关键设计：每个Agent只能看到自己"应该"知道的信息。例如：
-
-- 狼人知道同伴是谁，且可以在阵营记忆中保留历史协商摘要，但不知道预言家查了谁
-- 预言家知道自己的查验结果，但不知道狼人杀了谁
-
-**记忆分类**：
-
-| 级别     | 可见范围 | 示例 |
-| -------- | -------- | ---- |
-| 公共记忆 | 所有玩家 | 白天发言、投票结果、死亡公告、警长竞选结果 |
-| 阵营记忆 | 仅同阵营队友 | 狼人同伴信息、狼人历史协商摘要 |
-| 私有记忆 | 仅自己 | 自己的角色身份、预言家查验结果、女巫用药状态、个人策略、thinking |
-
-**阵营记忆**是独立的记忆通道，仅在后端维护，不暴露给其他阵营的 Agent：
-
-- 狼人阵营：记录同伴玩家编号、每轮狼人协商投票结果及最终击杀目标摘要。每个狼人 Agent 的 prompt 中会自动注入阵营记忆作为上下文
-- 好人阵营（默认）：无阵营共享记忆，各好人角色之间不可互通私有信息
-- 狼人夜间协商（`WOLF_DISCUSS`）仍为独立阶段，协商过程中的即时交互由引擎临时注入；协商结束后的结论写入阵营记忆，后续轮次无需从夜晚日志中按身份过滤重建
-
-**thinking 可见性**：
-
-- `thinking` 只对产生该内容的模型自身和人类观赛者可见。
-- `thinking` 不进入公开发言，不参与投票讨论文本，也不会被其他 Agent 当作公共信息读取。
-- 日志中 `thinking` 事件标记为 `visibility: ["observer", "player:{self}"]`。
-
-记忆压缩（可选）：当游戏轮次较多、对话历史超出模型上下文窗口时，可启用摘要压缩策略——将早期轮次的详细对话压缩为自然语言摘要，保留关键决策节点，具体策略可在规则配置中开关。
-
-### 4. Prompt 工程 (`app/agents/prompts.py`)
-
-Prompt 采用**分层组装**设计：
-
-```
-System Prompt:
-  ┌─────────────────────────┐
-  │   [规则层]              │  ← 游戏规则
-  │   [身份层]              │  ← 你的角色和技能
-  │   [人格层]              │  ← 你的性格描述
-  │   [记忆层]              │  ← 你已知的信息
-  │   [约束层]              │  ← 信息隔离约束（不得泄露角色特权信息）
-  └─────────────────────────┘
-
-User Prompt:
-  [当前阶段指令 + 要求输出格式]
-
-思考模式 ON 时额外要求:
-  "请先进行内部推理（thinking字段），再给出公开行为（action/speech字段）"
-```
-
-要求模型返回结构化 JSON：
-
-```json
-{
-  "thinking": "我是狼人，预言家刚说查了3号，我应该...",
-  "action": {"target": 3, "type": "vote"},
-  "speech": "我觉得3号很可疑..."
-}
-```
-
-`ON_DEATH_SKILL` 阶段的输出格式（若玩家同时为猎人和警长）：
-
-```json
-{
-  "thinking": "我是猎人兼警长，被处决了，应该开枪带走过5号并把警徽给3号...",
-  "death_skill": {"type": "shoot", "target": 5},
-  "sheriff_transfer": {"target": 3},
-  "last_words": "我怀疑5号是狼人..."
-}
-```
-
-### 5. 角色系统 (`app/roles/base.py`)
+### 4.4 DeathRecord
 
 ```python
-class BaseRole:
-    name: str                    # 角色名
-    faction: Faction             # 阵营：WOLF / VILLAGE / OTHER
-    night_priority: int          # 夜间行动优先级（数值小优先）
-    skills: list[Skill]          # 技能列表
-  
-    def night_action(self, agent, state) -> ActionResult
-    def day_action(self, agent, state) -> ActionResult
-    def on_death(self, agent, state) -> ActionResult | None  # 死亡触发技能
-    def get_night_prompt(self, state) -> str
-    def get_day_prompt(self, state) -> str
+class DeathRecord:
+    player_id: int
+    timing: Literal["night", "day"]
+    round_no: int
+    causes: list[DeathCause]
+    can_trigger_death_skill: bool
+    has_last_words: bool
 ```
 
-角色通过继承 `BaseRole` 扩展，新增角色只需实现对应接口，无需改动引擎。其中 `on_death` 用于处理死亡触发型技能（如猎人开枪）。
+## 5. 状态机
 
-### 6. LLM 调用层 (`app/llm/`)
+系统阶段固定，不根据人数或角色组合变化。
 
-#### 6.1 多格式适配器 (`app/llm/adapter.py`)
-
-采用适配器模式统一不同 LLM 提供商的接口：
-
-```python
-class ProviderAdapter(ABC):
-    @abstractmethod
-    async def complete(self, messages, **kwargs) -> LLMResponse
-  
-    @abstractmethod
-    def parse_response(self, raw_response) -> dict
+```text
+SETUP
+→ ROLE_ASSIGNMENT
+→ NIGHT_BEGIN
+→ GUARD_ACTION
+→ WOLF_DISCUSS
+→ WITCH_ACTION
+→ SEER_ACTION
+→ NIGHT_RESOLVE
+→ DAWN
+→ DEATH_SKILL
+→ LAST_WORDS
+→ WIN_CHECK
+→ SHERIFF_ELECTION   # 仅第一天
+→ DISCUSS_ORDER
+→ DISCUSS
+→ VOTE
+→ VOTE_RESULT
+→ EXILE / NO_ELIMINATION
+→ DEATH_SKILL
+→ LAST_WORDS
+→ WIN_CHECK
+→ NIGHT_BEGIN / GAME_END
 ```
 
-内置适配器：
+白天任意允许自爆的发言窗口中，狼人可触发：
 
-| 适配器            | 适配格式                    | 支持模型                                  |
-| ----------------- | --------------------------- | ----------------------------------------- |
-| `OpenAIAdapter` | OpenAI Chat Completions API | GPT-4、GPT-3.5、DeepSeek、Qwen 等兼容接口 |
-| `ClaudeAdapter` | Anthropic Messages API      | Claude 3.5/3/系列                         |
-
-适配器选择通过配置文件 `configs/models/providers.yaml` 指定，运行时自动加载。
-
-> **注意**：`TokenPlanAdapter` 已暂时移除，待 Token Plan 格式稳定后再考虑接入。
-
-#### 6.2 输出解析与校验 (`app/agents/parser.py`)
-
-模型返回的 JSON 需要经过解析与校验：
-
-```python
-class OutputParser:
-    def parse(self, raw: str) -> ParsedOutput:
-        """将模型原始输出解析为结构化数据"""
-        # 1. 提取JSON（兼容markdown代码块包裹的情况）
-        # 2. 解析为dict
-  
-    def validate(self, output: ParsedOutput, context: GameContext) -> ValidatedOutput:
-        """校验动作合法性"""
-        # - action.target 是否为合法玩家编号
-        # - action.type 是否为当前阶段允许的动作
-        # - 技能使用是否符合冷却/限制规则
-        # 非法时抛出 ValidationError，触发重试
+```text
+DISCUSS / SHERIFF_ELECTION / TIE_SPEECH
+→ SELF_DESTRUCT
+→ DEATH_SKILL
+→ LAST_WORDS
+→ WIN_CHECK
+→ NIGHT_BEGIN / GAME_END
 ```
 
-#### 6.3 重试与降级策略 (`app/llm/retry.py`)
+## 6. 引擎职责
 
-```python
-class RetryPolicy:
-    max_retries: int = 3                    # 最大重试次数
-    retry_on_parse_error: bool = True        # 解析失败时重试
-    retry_on_validation_error: bool = True   # 校验失败时重试
-    retry_on_timeout: bool = True            # 超时时重试
-    retry_on_rate_limit: bool = True         # 限流时重试（自动退避）
-    fallback_model: str | None = None        # 降级备选模型
-```
+引擎是唯一可以修改游戏真实状态的模块。
 
-重试流程：
+每个阶段执行流程：
 
-```
-LLM调用 → 解析 → 校验
-  │         │       │
-  │(失败)   │(失败)  │(不合法)
-  │         │       │
-  └──── 重试(带原始错误提示) ────┘
-                 │
-          超过最大重试次数？
-           ├─ 是 → 降级到备选模型 或 随机决策
-           └─ 否 → 返回成功结果
-```
+1. 根据 `GameState.phase` 生成当前可行动玩家列表。
+2. 为每个行动玩家构造可见上下文。
+3. 调用 LLM 或使用系统默认动作。
+4. 解析 JSON 输出。
+5. 使用 `lyingllm.domain.rules.validator` 校验动作是否合法。
+6. 记录事件。
+7. 更新状态或进入下一阶段。
 
-#### 6.4 并发控制
+所有动作失败都走统一策略：
 
-白天正式发言不能并行。发言顺序由 `DISCUSS_ORDER` 阶段确定：
+- 解析失败：要求重试。
+- 非法动作：说明原因并重试。
+- 超时或达到重试上限：使用 `rule.md` 中定义的默认动作。
 
-- 如果存在存活警长，警长先选择起始发言玩家；若警长为 AI 玩家，引擎需调用 LLM 让其做出选择（输入当前存活玩家列表和白天公开信息，输出选择起始玩家编号），选择结果即时生效
-- 如果没有存活警长或未启用警长机制，引擎随机选择一名存活玩家作为起始发言玩家
-- 从起始玩家开始按玩家编号递增顺序依次发言，到最大编号后回到最小编号，跳过已出局玩家
-- 每位玩家发言时能看到此前已经公开的白天发言、投票和死亡公告；不能看到尚未轮到的玩家即将生成的发言
+## 7. 规则实现边界
 
-**投票和遗言同样不能并行**：投票按编号依次进行，遗言按编号从小到大依次进行。
+规则常量来自 `rule.md` 的“系统实现常量”。
 
-LLM 调用仍需要并发管理，但仅用于以下场景：
+实现时需要特别固定以下口径：
 
-- 不同对局之间可完全并行
-- 夜间**同优先级且互不依赖**的动作可并行（如多个狼人各自的投票表态），但依赖链上的动作必须串行（如女巫的决策依赖狼人的击杀目标）
-- 裁判评选或批量模拟等非游戏流程场景
+- 狼人阵营角色：`werewolf`、`white_wolf_king`。
+- 神职角色：`seer`、`witch`、`hunter`、`guard`。
+- 村民角色：`villager`。
+- 胜负：好人胜为所有狼人阵营出局；狼人胜为所有神职出局或所有村民出局。
+- 夜间顺序：守卫 → 狼人 → 女巫 → 预言家。
+- 投票：得票最高者放逐，弃票只进入票形日志。
+- 平票重投仍平票：无人出局。
+- 女巫：可自救，不能同夜双药，解药用完后失去刀口信息。
+- 守卫：可空守，可自守，不可连续两晚守同一人。
+- 同守同救：目标死亡。
+- 猎人：被毒不能开枪。
+- 白狼王：白天自爆可带走一人，之后直接入夜。
+- 遗言：第一夜死亡有遗言；第二夜起夜死无遗言；白天死亡有遗言；先死亡技能再遗言。
+- 夜间结算同时满足狼人屠边和狼人全灭时，狼人优先胜利。
 
-### 7. 规则系统 (`configs/rules/classic.yaml`)
+## 8. LLM Agent 设计
 
-规则可YAML配置，模型在游戏开始时读取规则：
+### 8.1 Agent 输入
 
-```yaml
-name: "经典狼人杀"
-version: "1.0"
-phases:
-  night_order: [guard, werewolf, witch, seer]
-  day_order: [announce, discuss, vote, execute]
-  enable_sheriff: true                    # 是否启用警长
-  enable_last_words: true                 # 是否启用遗言
-  enable_wolf_discuss: true               # 狼人是否可以夜间讨论
-  day_speech_order: sheriff_choose_or_random_clockwise
-voting:
-  type: majority        # majority / plurality
-  tie_handling: revote   # revote / no_elimination / random
-  max_revote_rounds: 2    # 平票后最大重投轮次
-  final_tie_resolution: no_elimination  # 超过重投轮次后的最终处理：no_elimination / random_elimination
-  allow_abstain: true
-  sheriff_vote_weight: 1.5               # 警长票权重
-win_conditions:
-  wolves_eliminated: "好人阵营胜利"
-  wolves_equal_villagers: "狼人阵营胜利"
-roles:
-  werewolf: {min: 2, max: 4}
-  seer: {min: 1, max: 1}
-  witch: {min: 1, max: 1}
-  hunter: {min: 0, max: 1}
-  guard: {min: 0, max: 1}
-  villager: {min: 0, max: 99}
-special_rules:
-  witch_can_self_save: false             # 女巫首夜能否自救
-  hunter_can_shoot_on_witch_kill: true   # 猎人被女巫毒死能否开枪
-  guard_cannot_guard_same_twice: true    # 守卫能否连续守同一人
-  guard_blocks_wolf_kill: true
-  witch_save_blocks_wolf_kill: true
-  guard_witch_same_target_dies: true      # 守卫和女巫同救同一人时是否死亡
-merge_death_causes: true                # 多死因是否合并记录
-  first_night_has_last_words: true        # 首夜死亡是否有遗言
-  mvp_include_dead_players: true        # 是否允许评选已淘汰玩家为MVP
-  sheriff_can_transfer: true              # 警长能否移交警徽
-logs:
-  split_day_night: true
-  night_log_visibility: observer_only
-  event_sourcing: true
-memory_compression:
-  enabled: false                          # 是否启用记忆压缩
-  threshold_rounds: 5                      # 超过N轮后启用压缩
-  strategy: summarize                      # summarize / sliding_window
-```
+每次调用模型时，只传入该玩家可见信息：
 
-### 8. 数据流与实时通信
+- 自己的身份、阵营、存活状态。
+- 公共事件摘要。
+- 自己的私有事件。
+- 狼人玩家额外获得狼人阵营事件。
+- 当前阶段允许动作和 JSON schema。
 
-```
- 用户操作                后端处理                  前端展示
-┌──────┐  HTTP/WS  ┌──────────┐           ┌──────────┐
-│Setup │──────────→│创建对局   │           │          │
-│Page  │           │分配角色   │──WS──────→│ Game     │
-│      │           │          │           │ Board    │
-└──────┘           │引擎循环   │           │          │
-                   │  ↓       │           │ ChatPanel│
-                   │LLM调用   │──WS──────→│ VotePanel│
-                   │  ↓       │           │Thinking  │
-                   │状态更新   │           │ Viewer   │
-                   │  ↓       │           │          │
-                   │事件广播   │──WS──────→│          │
-                   │  ↓       │           └──────────┘
-                   │日志持久化 │
-                   └──────────┘
-```
+观赛者信息、其他玩家私有信息、真实死因不得进入普通 Agent prompt。
 
-### 9. 日志系统 (`app/storage/game_log.py`)
+### 8.2 Agent 输出
 
-日志采用事件溯源设计：状态变化不只保存最终快照，而是保存每一步事件，方便回放、断点恢复、调试 LLM 输出和后续统计。每局游戏生成一个 JSON 日志文件，内部按可见性拆分为白天日志、夜晚日志和观赛者日志。
+所有模型输出必须是 JSON。动作类型以 `rule.md` 第 9 节为准。
 
-- **白天日志 `day_log`**：保存所有公开信息，包括发言、投票、处决、遗言、死亡公告、警长竞选等；所有 Agent 和人类观赛者可见。
-- **夜晚日志 `night_log`**：保存夜间行动、夜间协商、技能目标、真实死因等；仅上帝视角/人类观赛者可见，不直接暴露给非授权 Agent。
-- **观赛者日志 `observer_log`**：保存 thinking、模型原始输出、裁判评语等只面向观赛与分析的信息。
-- **私有结果 `private_events`**：保存预言家查验结果、女巫用药状态等，仅在构造对应 Agent 上下文时注入。
-
-基础事件结构：
+示例：
 
 ```json
 {
-  "event_id": 42,
-  "schema_version": "1.0",
-  "game_id": "uuid",
-  "round": 2,
-  "phase": "day_2_discuss",
-  "event_type": "speech",
-  "player_id": 3,
-  "visibility": ["public"],
-  "causation_id": 41,
-  "data": {
-    "content": "我怀疑4号是狼人..."
-  },
-  "raw_model_output": {
-    "thinking": "...",
-    "speech": "我怀疑4号是狼人..."
-  },
-  "validated_action": {
-    "type": "speech"
-  },
-  "state_hash": "sha256:...",
-  "timestamp": "..."
+  "action": "vote",
+  "target": 7,
+  "speech": "7号的警徽流和发言逻辑对不上，我投7号。"
 }
 ```
 
-完整日志结构示例：
+发言和动作分离：
 
-```json
-{
-  "schema_version": "1.0",
-  "game_id": "uuid",
-  "config": { "players": [...], "rules": "classic", ... },
-  "day_log": [
-    {
-      "event_id": 10,
-      "phase": "day_1_discuss",
-      "event_type": "speech",
-      "player_id": 2,
-      "visibility": ["public"],
-      "data": {"content": "我怀疑4号是狼人..."},
-      "timestamp": "..."
-    },
-    {
-      "event_id": 18,
-      "phase": "day_1_vote",
-      "event_type": "vote",
-      "player_id": 2,
-      "visibility": ["public"],
-      "data": {"target": 4},
-      "timestamp": "..."
-    }
-  ],
-  "night_log": [
-    {
-      "event_id": 3,
-      "phase": "night_1",
-      "event_type": "night_action",
-      "role": "werewolf",
-      "player_id": 1,
-      "visibility": ["observer"],
-      "action": {"type": "kill", "target": 3},
-      "timestamp": "..."
-    }
-  ],
-  "observer_log": [
-    {
-      "event_id": 11,
-      "phase": "day_1_discuss",
-      "event_type": "thinking",
-      "player_id": 2,
-      "visibility": ["observer", "player:2"],
-      "data": {"thinking": "实际上我是预言家，我查了4号..."},
-      "timestamp": "..."
-    }
-  ],
-  "result": { "winner": "village", "rounds": 5 },
-  "mvp": {
-    "player_id": 3,
-    "role": "werewolf",
-    "model": "gpt-4o",
-    "reason": "该玩家成功伪装成预言家，连续两晚引导好人阵营误投村民..."
-  }
-}
+- `speech` 是公开文本，会进入公共日志。
+- `action` 是系统动作，会被校验和执行。
+- 模型的推理摘要不会进入公共发言。
+
+## 9. Reasoning Trace
+
+不同 provider 对“思考内容”的支持不同。系统统一归一化为 `reasoning_trace`。
+
+```python
+class ReasoningTrace:
+    mode: Literal["off", "hidden", "summary", "full", "encrypted", "usage_only", "self_explanation"]
+    provider: str
+    model: str
+    player_id: int
+    content: str | None
+    token_count: int | None
+    raw_ref: str | None
 ```
 
-### 10. 裁判 AI 与 MVP 评选 (`app/agents/judge.py`)
+处理原则：
 
-每局游戏配置一名**裁判 AI**，在游戏结束后自动执行 MVP 评选：
+- OpenAI reasoning models：优先保存 reasoning summary；encrypted reasoning 只用于后续请求，不展示正文。
+- Claude / Gemini：若 API 返回 thought summary 或 thought parts，则保存为 `summary` 或 `full`。
+- DeepSeek / Qwen：若返回 `reasoning_content`，保存为 `full`。
+- 普通 chat 模型：不伪装真实思考；如需观赛解释，标记为 `self_explanation`。
 
-```
-GAME_END → 裁判 AI 读取完整日志 → 在胜利阵营中评选 MVP → 输出理由
-```
+`reasoning_trace` 只对观赛者和对应玩家可见，不进入公共记忆。
 
-**裁判 AI 配置**：
+## 10. 日志系统
 
-- 在 Setup 阶段与玩家模型一同配置（选择模型、provider、人格提示词）
-- 裁判 AI 不参与游戏，仅在游戏结束时被调用
-- 支持为裁判 AI 配置不同的"评判风格"（如严格型、鼓励型、逻辑分析型）
+日志采用单一事件流，所有事件只写一次。
 
-**评选流程**：
-
-1. 游戏结束后，引擎将本局完整日志（含所有公开发言、投票、思维过程、角色身份）打包发送给裁判 AI
-2. 裁判 AI 在**胜利阵营**中评选 MVP，优先考虑存活玩家；但若已淘汰玩家对胜利有重大贡献（如预言家查验出关键狼人后被杀），也可评选已淘汰玩家
-3. 规则配置 `mvp_include_dead_players`（默认 `true`）控制是否允许评选已淘汰玩家
-4. 裁判 AI 返回结构化结果：
-   ```json
-   {
-     "mvp_player_id": 3,
-     "reason": "..."
-   }
-   ```
-4. 结果写入对局日志，并通过 WebSocket 推送到前端展示
-
-**评选维度参考**（由裁判 AI 的 prompt 引导，不做硬编码限制）：
-
-- 作为狼人时的伪装与欺骗效果
-- 作为好人时的推理与带票能力
-- 关键轮次的决策质量
-- 对团队胜利的贡献度
-
-## 游戏规则
-
-### 核心规则
-
-#### 角色阵营
-
-| 阵营     | 角色   | 说明                                                                               |
-| -------- | ------ | ---------------------------------------------------------------------------------- |
-| 狼人阵营 | 狼人   | 夜间选择一名玩家击杀，互相知道身份                                                 |
-| 好人阵营 | 村民   | 无特殊技能，依靠推理发言辨别狼人                                                   |
-| 好人阵营 | 预言家 | 每晚可查验一名玩家的身份（是否为狼人）                                             |
-| 好人阵营 | 女巫   | 拥有一瓶解药（救人）和一瓶毒药（毒人），各限用一次                                 |
-| 好人阵营 | 猎人   | 死亡时（被投票处决或被狼人杀死）可开枪带走一名玩家                                 |
-| 好人阵营 | 守卫   | 每晚可选择守护一名玩家，被守护的玩家若被狼人袭击则不会死亡；不可连续两晚守护同一人 |
-
-#### 游戏流程
-
-1. **角色分配**：随机或手动分配角色
-2. **警长竞选**（如启用）：玩家依次发表竞选宣言，投票选出警长
-3. **夜晚阶段**：
-   - 守卫选择守护对象
-   - 狼人协商选择击杀目标
-   - 女巫决定是否使用解药/毒药
-   - 预言家选择查验对象
-4. **天亮结算与公布**（DAWN 阶段）：统一结算夜间行动，公布昨夜死亡信息（不公布死因和角色）
-5. **遗言环节**（如启用）：出局玩家发表遗言；若多人死亡，按玩家编号从小到大依次发言
-6. **死亡触发技能**：若有猎人死亡等触发技能，进入 `ON_DEATH_SKILL` 处理；若出局玩家同时为警长，在技能执行后一起选择警徽移交对象
-7. **胜负判定**：检查是否满足胜利条件
-8. **白天讨论**：由警长指定起始发言玩家（若警长为 AI 则引擎调用 LLM 让其选择）；如果没有警长，则随机选择一名存活玩家作为起点；从起始玩家开始按编号递增顺序依次发言
-9. **投票处决**：投票选出一名嫌疑人，票数最高者被处决（警长票算1.5票）
-10. **平票重投**：若出现平票，平票玩家依次发言（按编号从小到大），然后其他玩家在平票候选人中重新投票；若重投后仍平票，按规则配置处理（无人出局或随机淘汰）
-11. **处决后遗言**（如启用）：被处决者发表遗言
-12. **处决后死亡触发技能与警长移交**：被处决者若是猎人可选择开枪；若被处决者为警长可选择移交警徽
-13. **胜负判定**：检查是否满足胜利条件
-14. 若未分出胜负，回到步骤3
-
-#### 胜利条件
-
-- **好人阵营胜利**：所有狼人被淘汰
-- **狼人阵营胜利**：存活狼人数量 ≥ 存活好人数量
-
-#### 胜负判定方案
-
-胜负判定由 `WIN_CHECK` 阶段统一执行。Prompt 可以向 Agent 解释胜负目标，但最终是否结束游戏必须由状态机根据真实角色和存活状态判断。
-
-判定触发时机：
-
-- 夜间 DAWN 阶段完成结算并确认死亡后
-- 白天 `EXECUTE` 完成处决后
-- `ON_DEATH_SKILL` 完成并确认额外死亡后
-- 手动终止或不可恢复错误进入 `ABORTED` 时，不判定正常胜负
-
-默认判定顺序：
-
-1. 统计存活狼人数量 `alive_wolves`。
-2. 统计存活好人数量 `alive_villagers`，包括村民和所有神职。
-3. 如果 `alive_wolves == 0`，好人阵营胜利。
-4. 如果 `alive_wolves >= alive_villagers`，狼人阵营胜利。
-5. 否则游戏继续进入下一阶段。
-
-可扩展判定：
-
-- 如果后续引入屠边规则，可改为 `wolves_kill_all_villagers` 或 `wolves_kill_all_gods`。
-- 如果引入第三方角色，`WinConditionEvaluator` 按优先级先判断第三方特殊胜利，再判断狼人/好人阵营。
-- 若同一次结算中好人和狼人条件同时满足，按规则配置 `win_tie_breaker` 决定优先级。
-
-#### 警长机制
-
-- 警长通过竞选产生，票数最高者当选
-- 警长投票时票数算1.5票
-- 警长死亡时可在 `ON_DEATH_SKILL` 阶段选择移交警徽给任意存活玩家（需规则配置 `sheriff_can_transfer: true`）；若警长为 AI 玩家，引擎调用 LLM 让其选择移交对象；若警长同时为猎人，开枪目标和警徽移交对象合并在一次 LLM 调用中完成
-- 若警长被淘汰且未移交警徽（或规则不允许移交），警长职位本轮作废
-
-#### 遗言环节
-
-- 被狼人杀害的玩家：如启用遗言规则，可在公布死亡后发表遗言
-- 被投票处决的玩家：可在处决前发表遗言
-- 遗言内容对所有存活玩家公开
-- 若需多人发表遗言，按玩家编号从小到大依次发言
-
-#### 投票与平票规则
-
-- 投票采用多数决（可配置为相对多数）
-- 警长票权重为1.5票
-- 允许弃票（可配置 `allow_abstain`）
-- **平票重投流程**：
-  1. 若投票结果出现两人或以上得票数相同且为最高票，进入平票重投
-  2. 得票数相同的玩家依次发言（按编号从小到大），仅平票玩家发言
-  3. 其他玩家在平票候选人中重新投票
-  4. 若重投后仍平票，按规则配置的 `tie_handling` 处理（默认再次重投，最多 `max_revote_rounds` 轮）
-  5. 超过最大重投轮次后仍平票，按 `final_tie_resolution` 配置决定：`no_elimination`（无人出局）或 `random_elimination`（随机淘汰一人）
-- 全员弃票时直接判定无人出局
-
-#### 首夜特殊规则
-
-- 女巫首夜是否可以自救：由规则配置决定（默认不可）
-- 首夜死亡是否享有遗言：由规则配置决定
-- 守卫首夜是否可以空守：允许
-
-#### 死亡触发技能
-
-部分角色在死亡时触发特殊技能，需要单独处理：
-
-| 角色 | 触发条件                | 技能效果                   |
-| ---- | ----------------------- | -------------------------- |
-| 猎人 | 被投票处决 / 被狼人杀死 | 可选择开枪带走一名存活玩家 |
-| 猎人 | 被女巫毒杀              | 由规则配置决定是否可以开枪 |
-
-#### 狼人内部协商
-
-- 夜间阶段，所有狼人互通信息，协商选择击杀目标
-- 协商为独立阶段（`WOLF_DISCUSS`），采用固定轮次的结构化协商流程：
-  1. **第一轮表决**：每位狼人必须给出一个击杀目标
-  2. **计票规则**：得票数最多的目标直接确认为当晚击杀目标
-  3. **平票处理**：若出现平票，平票目标相关的狼人各简短说明理由，随后进行第二轮表决，依旧按多数票选择
-  4. **仍未达成**：若第二轮仍平票，从讨论中出现过的目标中随机指定一位作为击杀目标
-- 协商内容在夜间阶段仅对狼人可见；阶段结束后写入夜晚日志，夜晚日志仅上帝视角可见，不进入公共白天日志
-
-### 规则可配置项
-
-所有规则均可在 YAML 配置中自定义，包括但不限于：
-
-- 角色数量范围
-- 警长机制开关与参数
-- 遗言规则开关与参数
-- 首夜特殊规则
-- 投票规则（多数决/相对多数/平票处理）
-- 胜利条件
-- 记忆压缩策略
-
-## API 设计
-
-### REST API
-
-| 方法 | 路径                                          | 说明                                |
-| ---- | --------------------------------------------- | ----------------------------------- |
-| POST | `/api/games`                                | 创建新对局                          |
-| GET  | `/api/games/{game_id}`                      | 获取对局状态                        |
-| POST | `/api/games/{game_id}/start`                | 开始游戏                            |
-| POST | `/api/games/{game_id}/pause`                | 暂停对局                            |
-| POST | `/api/games/{game_id}/resume`               | 恢复对局                            |
-| POST | `/api/games/{game_id}/step`                 | 单步推进一个状态或一个动作          |
-| POST | `/api/games/{game_id}/stop`                 | 手动终止对局，进入 `ABORTED`        |
-| POST | `/api/games/{game_id}/rerun-action`         | 重新执行最近一次失败或指定动作      |
-| POST | `/api/games/{game_id}/action`               | 提交玩家操作（供降级随机决策使用）  |
-| GET  | `/api/games/{game_id}/mvp`                  | 获取本局 MVP 评选结果（游戏结束后） |
-| GET  | `/api/games/{game_id}/log`                  | 获取对局完整日志                    |
-| GET  | `/api/games/{game_id}/log/day`              | 获取白天公开日志                    |
-| GET  | `/api/games/{game_id}/log/night`            | 获取夜晚上帝视角日志                |
-| GET  | `/api/games/{game_id}/events?after_id=0`    | 按事件 ID 增量获取事件，用于重连恢复 |
-| GET  | `/api/games/{game_id}/thinking/{player_id}` | 获取指定玩家的思维过程              |
-| GET  | `/api/games`                                | 列出所有对局                        |
-| POST | `/api/configs/validate`                     | 校验规则、角色、模型配置是否可运行  |
-| GET  | `/api/configs/roles`                        | 获取角色配置列表                    |
-| GET  | `/api/configs/rules`                        | 获取规则配置列表                    |
-| GET  | `/api/configs/models`                       | 获取可用模型列表                    |
-
-### WebSocket 事件协议
-
-事件类型枚举与数据格式：
-
-客户端连接时可携带 `last_event_id`，例如 `/api/ws/games/{game_id}?last_event_id=42`。服务端先补发 `event_id > 42` 的事件，再推送实时事件，保证页面刷新或网络断开后可以恢复。
-
-```typescript
-enum GameEventType {
-  // 游戏生命周期
-  GAME_START          = "game_start",
-  GAME_END            = "game_end",
-  GAME_PAUSED         = "game_paused",
-  GAME_RESUMED        = "game_resumed",
-  GAME_ABORTED        = "game_aborted",
-
-  // 阶段转换
-  PHASE_CHANGE        = "phase_change",      // 阶段切换
-  STATE_SNAPSHOT      = "state_snapshot",    // 重连后的状态快照
-  
-  // 警长竞选
-  SHERIFF_ELECTION    = "sheriff_election",   // 警长竞选开始
-  SHERIFF_RESULT      = "sheriff_result",     // 警长选举结果
-
-  // 夜间阶段
-  NIGHT_BEGIN         = "night_begin",
-  WOLF_DISCUSS        = "wolf_discuss",       // 狼人协商
-  NIGHT_ACTION        = "night_action",       // 角色夜间行动
-
-  // 白天阶段
-  DAWN                = "dawn",               // 天亮（含结算与死亡公告）
-
-  // 讨论与投票
-  SPEECH              = "speech",              // 发言
-  LAST_WORDS          = "last_words",          // 遗言
-  VOTE                = "vote",                // 投票
-  VOTE_RESULT         = "vote_result",         // 投票结果
-  TIE_SPEECH          = "tie_speech",          // 平票玩家发言
-  TIE_VOTE            = "tie_vote",            // 平票重投
-  EXECUTE             = "execute",             // 处决
-
-  // 死亡触发
-  ON_DEATH_SKILL      = "on_death_skill",      // 死亡触发技能
-
-  // 思维过程
-  THINKING            = "thinking",            // Agent 思维过程（按需推送）
-
-  // 运行控制与错误
-  ACTION_RETRY        = "action_retry",
-  ACTION_FALLBACK     = "action_fallback",
-  ERROR               = "error",
-}
+```python
+class GameEvent:
+    event_id: int
+    game_id: str
+    round_no: int
+    phase: Phase
+    event_type: str
+    player_id: int | None
+    visibility: list[str]       # public / observer / player:{id} / wolves
+    data: dict
+    raw_response_ref: str | None
+    timestamp: str
 ```
 
-每个事件的数据结构：
+派生视图：
 
-```json
-{
-  "event_type": "speech",
-  "event_id": 42,
-  "game_id": "uuid",
-  "round": 1,
-  "phase": "day_1",
-  "player_id": 3,
-  "data": {
-    "content": "我怀疑4号是狼人..."
-  },
-  "timestamp": "2025-05-02T12:00:00Z"
-}
+- `public_view`：只包含 `visibility` 中有 `public` 的事件。
+- `observer_view`：包含所有事件。
+- `player_view(player_id)`：公共事件 + 该玩家私有事件 + 该玩家可见阵营事件。
+- `wolf_view`：公共事件 + 狼人阵营事件。
+
+事件类型最少包含：
+
+- `phase_change`
+- `speech`
+- `vote`
+- `vote_result`
+- `night_action`
+- `night_resolution`
+- `death`
+- `death_skill`
+- `last_words`
+- `sheriff_election`
+- `sheriff_result`
+- `self_destruct`
+- `reasoning_trace`
+- `game_end`
+
+## 11. API 与 WebSocket
+
+### 11.1 REST API
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `POST` | `/api/games` | 创建 12 人固定局 |
+| `POST` | `/api/games/{id}/start` | 开始游戏 |
+| `POST` | `/api/games/{id}/step` | 单步推进 |
+| `POST` | `/api/games/{id}/pause` | 暂停 |
+| `POST` | `/api/games/{id}/resume` | 恢复 |
+| `POST` | `/api/games/{id}/stop` | 终止 |
+| `GET` | `/api/games/{id}` | 获取当前状态 |
+| `GET` | `/api/games/{id}/events?after_id=0` | 增量事件 |
+| `GET` | `/api/games/{id}/log` | 完整日志 |
+| `GET` | `/api/games/{id}/reasoning/{player_id}` | 指定玩家推理摘要 |
+| `GET` | `/api/games/{id}/mvp` | MVP 结果 |
+
+### 11.2 WebSocket
+
+连接：
+
+```text
+/api/ws/games/{game_id}?last_event_id=0
 ```
 
-### 环境变量与密钥管理
+服务端先补发 `event_id > last_event_id` 的事件，再推送实时事件。
 
-通过 `.env` 文件管理敏感配置，`.env.example` 提供模板：
+## 12. MVP 裁判
 
-```bash
-# Application
-APP_HOST=0.0.0.0
-APP_PORT=8000
-APP_DEBUG=false
-APP_LOG_DIR=./logs
+MVP 裁判不参与游戏，只在 `GAME_END` 后异步执行。
 
-# OpenAI
-OPENAI_API_KEY=sk-xxx
-OPENAI_BASE_URL=https://api.openai.com/v1
+流程：
 
-# Anthropic
-ANTHROPIC_API_KEY=sk-ant-xxx
-ANTHROPIC_BASE_URL=https://api.anthropic.com
+1. 游戏结束，立即写入结果并推送 `game_end`。
+2. 后台任务读取 observer 日志。
+3. 裁判模型只在胜利阵营中选择 MVP。
+4. 写入 `mvp_result` 事件。
+5. 推送给前端。
 
-# DeepSeek
-DEEPSEEK_API_KEY=xxx
+MVP 失败不影响游戏结果。
 
-# Custom Providers (OpenAI-compatible)
-# CUSTOM_PROVIDER_1_NAME=custom_1
-CUSTOM_PROVIDER_1_API_KEY=xxx
-CUSTOM_PROVIDER_1_BASE_URL=https://xxx/v1
-CUSTOM_PROVIDER_1_MODEL=xxx
-```
+## 13. 前端设计
 
-`.env` 文件已添加到 `.gitignore`，确保密钥不会被提交到仓库。
+前端只做观战和调试，不负责规则判定。
 
-## 前端设计
+页面：
 
-### 设计理念
+- `Setup`：选择 12 个玩家的模型、人格、是否启用 reasoning 展示。
+- `Game`：实时观战，显示玩家身份、存活状态、发言、投票、夜间行动和推理摘要。
+- `History`：读取日志并回放。
 
-用户以**上帝视角**观看整场游戏，可以看到所有信息：
+核心组件：
 
-- 每个模型的公开发言和投票行为
-- 每个模型的思维过程和推理逻辑（thinking）
-- 所有角色的身份和技能使用情况
-- 夜间行动的详细信息
+- 玩家座位区：12 个固定座位。
+- 中央事件流：展示当前阶段、发言、投票、死亡、遗言。
+- 夜间面板：观赛者可见夜间行动和结算。
+- 推理面板：展示 `reasoning_trace`，默认折叠。
+- 时间线：按事件回放。
 
-### 页面布局
+## 14. 开发顺序
 
-```
-┌────────────────────────────────────────────────────────────┐
-│  LyingLLM  ·  第 3 轮  ·  白天讨论阶段          [⚙️][📋][🔄] │
-├──────────────┬──────────────────────────────┬───────────────┤
-│  玩家 1      │                              │  玩家 7       │
-│  🐺 狼人     │                              │  🔮 预言家    │
-│  ████████    │     中 间 信 息 展 示 区       │  ████████    │
-│  [思维过程]  │                              │  [思维过程]    │
-│              │  ┌────────────────────────┐  │               │
-│  玩家 2      │  │  📢 玩家3: "我觉得4号   │  │  玩家 8       │
-│  🏠 村民     │  │     很可疑..."          │  │  🏠 村民      │
-│  ████████    │  │                        │  │  ████████    │
-│  [思维过程]  │  │  💭 玩家3 思考:         │  │  [思维过程]    │
-│              │  │  "我是预言家，查了4号    │  │               │
-│  ...         │  │   确实是狼人..."         │  │  ...         │
-│              │  │                        │  │               │
-│  玩家 6      │  │  🗳️ 投票: 玩家3 → 玩家4 │  │  玩家 12      │
-│  🧙 女巫     │  └────────────────────────┘  │  🛡️ 守卫     │
-│  ████████    │                              │  ████████    │
-│  [思维过程]  │                              │  [思维过程]    │
-├──────────────┴──────────────────────────────┴───────────────┤
-│  日志时间线:  [夜1: 🔴] → [白天1: 投票] → [夜2: ⏳]        │
-└────────────────────────────────────────────────────────────┘
-```
+建议按以下顺序实现：
 
-### 日夜视觉模式
-
-- **日间模式**：明亮背景，暖色调，显示白天讨论和投票界面
-- **夜间模式**：深色背景，冷色调，显示夜间行动（上帝视角可见所有角色行动，但标记"仅XX可见"
-
-日夜切换随游戏阶段自动切换，用户也可手动锁定某一模式。
-
-### 三大页面
-
-| 页面              | 功能                                                                   |
-| ----------------- | ---------------------------------------------------------------------- |
-| **Setup**   | 配置玩家数量、模型选择、性格设定、角色分配、规则选择，以及裁判 AI 模型 |
-| **Game**    | 实时观战，上帝视角查看所有信息，可切换查看各玩家思维过程               |
-| **History** | 浏览历史对局，查看日志和回放                                           |
-
-## 关键设计决策
-
-1. **信息隔离与阵营共享**：Agent 维护公共记忆、私有记忆和阵营记忆三层记忆；公共记忆所有玩家可见，私有记忆仅自己可见，阵营记忆仅同阵营队友可见（如狼人同伴信息与协商摘要）；引擎按阶段和身份决定记忆的注入与隔离
-2. **异步串行执行**：夜间行动按优先级收集并统一结算；白天发言按警长指定或随机起点依次串行
-3. **思考模式可视化**：`thinking` 字段与 `speech` 分离存储，仅模型自身和人类观赛者可见，不算作公开发言
-4. **规则即Prompt**：规则文件直接转化为 Agent system prompt 的一部分，确保所有模型"读懂"规则；胜负结束由 `WIN_CHECK` 按真实状态统一判定
-5. **角色可扩展**：新角色只需继承 `BaseRole` + 添加 YAML 配置，无需改动引擎
-6. **死亡触发技能**：通过 `on_death` 回调接口统一处理，不破坏主循环逻辑
-7. **多格式LLM适配**：适配器模式统一不同提供方的接口，新增仅需实现 `ProviderAdapter`
-8. **输出校验与重试**：所有模型输出经过解析→校验→重试的管道，确保游戏流程不被无效输出中断
-9. **上帝视角**：前端默认显示所有信息，用户可以自由查看任意玩家的思维过程
-
-## 后续可扩展方向
-
-- **批量对局与统计**：支持批量运行多局游戏，自动生成模型胜率、存活率等统计报告
-- **裁判 AI 扩展**：支持多裁判投票制、按维度打分（欺骗/推理/领导/贡献）
-- **多人类型支持**：加入"上帝"人类玩家主持游戏（可选）
-- **回放系统**：基于日志文件完整回放游戏过程
-- **模型对比面板**：多局统计，横向对比不同模型表现
-- **记忆压缩策略**：支持多种压缩方式（摘要、滑动窗口、重要度排序），可按模型上下文窗口大小自动选择
+1. 固化规则常量和 Pydantic 模型。
+2. 实现 GameState、Player、Action、Event。
+3. 实现夜间结算和胜负判定的单元测试。
+4. 实现状态机主循环。
+5. 实现 Agent prompt、parser、validator。
+6. 接入一个 OpenAI-compatible provider。
+7. 实现日志和 WebSocket。
+8. 实现最小前端观战页。
+9. 增加 reasoning_trace 和 MVP 裁判。
