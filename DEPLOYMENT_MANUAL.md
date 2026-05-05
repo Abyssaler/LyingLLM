@@ -28,7 +28,7 @@
 #### 方式 A：直接运行
 
 ```bash
-cd backend
+# 在项目根目录执行
 
 # 1. 创建虚拟环境
 python -m venv venv
@@ -52,15 +52,15 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
 
 ```ini
 [Unit]
-Description=LyingLLM Backend
+Description=LyingLLM API
 After=network.target
 
 [Service]
 Type=simple
 User=lyingllm
-WorkingDirectory=/opt/lyingllm/backend
-EnvironmentFile=/opt/lyingllm/backend/.env
-ExecStart=/opt/lyingllm/backend/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+WorkingDirectory=/opt/lyingllm
+EnvironmentFile=/opt/lyingllm/.env
+ExecStart=/opt/lyingllm/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
 Restart=always
 RestartSec=5
 
@@ -76,17 +76,18 @@ sudo systemctl start lyingllm
 
 #### 方式 C：Docker
 
-创建 `Dockerfile.backend`：
+创建 `Dockerfile.api`：
 
 ```dockerfile
 FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY backend/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY backend/ .
+COPY app ./app
+COPY configs ./configs
 
 EXPOSE 8000
 
@@ -96,13 +97,13 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--worker
 构建并运行：
 
 ```bash
-docker build -f Dockerfile.backend -t lyingllm-backend .
-docker run -d --name lyingllm-backend \
+docker build -f Dockerfile.api -t lyingllm-api .
+docker run -d --name lyingllm-api \
   -p 8000:8000 \
-  --env-file backend/.env \
-  -v $(pwd)/backend/configs:/app/configs:ro \
-  -v $(pwd)/backend/logs:/app/logs \
-  lyingllm-backend
+  --env-file .env \
+  -v $(pwd)/configs:/app/configs:ro \
+  -v $(pwd)/logs:/app/logs \
+  lyingllm-api
 ```
 
 ### 2.2 前端部署
@@ -192,17 +193,17 @@ CMD ["nginx", "-g", "daemon off;"]
 version: "3.8"
 
 services:
-  backend:
+  api:
     build:
       context: .
-      dockerfile: Dockerfile.backend
+      dockerfile: Dockerfile.api
     ports:
       - "8000:8000"
     env_file:
-      - backend/.env
+      - .env
     volumes:
-      - ./backend/configs:/app/configs:ro
-      - ./backend/logs:/app/logs
+      - ./configs:/app/configs:ro
+      - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -217,7 +218,7 @@ services:
     ports:
       - "80:80"
     depends_on:
-      backend:
+      api:
         condition: service_healthy
     restart: unless-stopped
 ```
@@ -232,7 +233,7 @@ docker compose up -d --build
 
 ### 3.1 后端环境变量
 
-创建 `backend/.env`（从 `.env.example` 复制）：
+创建 `.env`（从 `.env.example` 复制）：
 
 ```bash
 # === 必填 ===
@@ -318,7 +319,7 @@ server: {
 
 ### 5.1 添加新角色配置
 
-在 `backend/configs/roles/` 下创建新的 YAML 文件，例如 `custom.yaml`：
+在 `configs/roles/` 下创建新的 YAML 文件，例如 `custom.yaml`：
 
 ```yaml
 name: "自定义角色配置"
@@ -334,7 +335,7 @@ roles:
 
 ### 5.2 添加新规则配置
 
-在 `backend/configs/rules/` 下创建新的 YAML 文件，例如 `fast.yaml`：
+在 `configs/rules/` 下创建新的 YAML 文件，例如 `fast.yaml`：
 
 ```yaml
 name: "快速模式"
@@ -350,7 +351,7 @@ phases:
 
 ### 5.3 添加新 LLM 提供商
 
-**方式一**：修改 `backend/configs/models/providers.yaml`，添加新提供商条目。
+**方式一**：修改 `configs/models/providers.yaml`，添加新提供商条目。
 
 **方式二**：通过环境变量动态添加（适合部署时注入）：
 
@@ -363,7 +364,7 @@ CUSTOM_PROVIDER_1_MODEL=my-model-name
 
 ### 5.4 修改 CORS
 
-编辑 `backend/app/main.py` 中的 CORS 配置：
+编辑 `app/main.py` 中的 CORS 配置：
 
 ```python
 app.add_middleware(
@@ -381,7 +382,7 @@ app.add_middleware(
 
 ### 6.1 应用日志
 
-后端日志输出到 `backend/logs/` 目录（可通过 `APP_LOG_DIR` 环境变量配置）。
+后端日志输出到 `logs/` 目录（可通过 `APP_LOG_DIR` 环境变量配置）。
 
 ### 6.2 健康检查
 
@@ -400,7 +401,7 @@ sudo systemctl status lyingllm
 sudo journalctl -u lyingllm -f
 
 # Docker
-docker compose logs -f backend
+docker compose logs -f api
 docker compose ps
 ```
 
@@ -446,22 +447,22 @@ docker compose ps
 git clone <repo-url> && cd LyingLLM
 
 # 2. 配置后端
-cd backend
+# 在项目根目录执行
 cp .env.example .env
 # 编辑 .env 填入 OPENAI_API_KEY
 
 # 3. 配置前端
-cd ../frontend
+cd frontend
 npm install
 
 # 4. 启动后端（终端 1）
-cd ../backend
+cd ..
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 # 5. 启动前端开发服务器（终端 2）
-cd ../frontend
+cd frontend
 npm run dev
 
 # 6. 访问 http://localhost:3000 开始游戏
@@ -471,7 +472,7 @@ npm run dev
 
 ```bash
 # 后端
-cd backend && pip install -r requirements.txt
+pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
 
 # 前端

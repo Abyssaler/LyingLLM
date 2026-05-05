@@ -9,14 +9,14 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
-CONFIGS_DIR = BACKEND_DIR / "configs"
-LOGS_DIR = BACKEND_DIR / "logs"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+CONFIGS_DIR = PROJECT_ROOT / "configs"
+LOGS_DIR = PROJECT_ROOT / "logs"
 
 
 class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(BACKEND_DIR / ".env"),
+        env_file=str(PROJECT_ROOT / ".env"),
         env_file_encoding="utf-8",
         env_prefix="APP_",
         extra="ignore",
@@ -31,7 +31,7 @@ class AppSettings(BaseSettings):
 
 class OpenAISettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(BACKEND_DIR / ".env"),
+        env_file=str(PROJECT_ROOT / ".env"),
         env_file_encoding="utf-8",
         env_prefix="OPENAI_",
         extra="ignore",
@@ -44,7 +44,7 @@ class OpenAISettings(BaseSettings):
 
 class AnthropicSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(BACKEND_DIR / ".env"),
+        env_file=str(PROJECT_ROOT / ".env"),
         env_file_encoding="utf-8",
         env_prefix="ANTHROPIC_",
         extra="ignore",
@@ -57,7 +57,7 @@ class AnthropicSettings(BaseSettings):
 
 class CustomProviderSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(BACKEND_DIR / ".env"),
+        env_file=str(PROJECT_ROOT / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )

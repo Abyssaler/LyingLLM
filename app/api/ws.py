@@ -9,7 +9,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from app.core.event_bus import EventBus, Event
 from app.core.phase import Phase
 
-router = APIRouter(tags=["websocket"])
+router = APIRouter(prefix="/api/ws", tags=["websocket"])
 
 GAME_EVENT_TYPE_MAP: dict[str, str] = {
     "game_start": "game_start",
@@ -149,7 +149,7 @@ def create_event_bus_with_ws(game_id: str) -> EventBus:
     return bus
 
 
-@router.websocket("/ws/games/{game_id}")
+@router.websocket("/games/{game_id}")
 async def websocket_game(
     websocket: WebSocket,
     game_id: str,

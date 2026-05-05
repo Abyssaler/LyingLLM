@@ -38,7 +38,7 @@ LyingLLM 是一个由 LLM 驱动的狼人杀游戏系统。后端基于 FastAPI 
 ### 3.1 后端
 
 ```bash
-cd backend
+# 在项目根目录执行
 
 # 1. 创建虚拟环境（推荐）
 python -m venv venv
@@ -210,7 +210,7 @@ WAITING → SHERIFF_ELECTION → NIGHT_BEGIN → WOLF_DISCUSS → NIGHT_ACTIONS
 ### 6.1 目录结构
 
 ```
-backend/configs/
+configs/
 ├── roles/
 │   └── classic.yaml      # 角色定义（狼人/村民/预言家/女巫/猎人/守卫）
 ├── rules/
@@ -221,7 +221,7 @@ backend/configs/
 
 ### 6.2 环境变量
 
-配置文件路径：`backend/.env`（从 `.env.example` 复制）
+配置文件路径：`.env`（从 `.env.example` 复制）
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
@@ -238,9 +238,9 @@ backend/configs/
 
 ### 6.3 YAML 配置
 
-**角色配置** (`roles/classic.yaml`)：定义 6 种角色的名称、阵营、技能、提示词等。
+**角色配置** (`configs/roles/classic.yaml`)：定义 6 种角色的名称、阵营、技能、提示词等。
 
-**规则配置** (`rules/classic.yaml`)：定义游戏流程规则，关键参数：
+**规则配置** (`configs/rules/classic.yaml`)：定义游戏流程规则，关键参数：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -257,14 +257,14 @@ backend/configs/
 | `guard_cannot_guard_same_twice` | true | 守卫不能连续守护同一人 |
 | `mvp_include_dead_players` | true | MVP 评选是否包含死亡玩家 |
 
-**模型配置** (`models/providers.yaml`)：定义 LLM 提供商、默认模型、重试策略等。API Key 使用 `${ENV_VAR}` 格式引用环境变量。
+**模型配置** (`configs/models/providers.yaml`)：定义 LLM 提供商、默认模型、重试策略等。API Key 使用 `${ENV_VAR}` 格式引用环境变量。
 
 ---
 
 ## 7. 测试
 
 ```bash
-cd backend
+# 在项目根目录执行
 
 # 运行所有测试
 python tests/test_all.py      # 基础模型/角色/内存/解析器测试
@@ -296,7 +296,7 @@ npm run build
 
 | 问题 | 原因 | 解决方法 |
 |------|------|---------|
-| `OPENAI_API_KEY` 报错 | 未设置 API Key | 编辑 `backend/.env` 填入有效 Key |
+| `OPENAI_API_KEY` 报错 | 未设置 API Key | 编辑 `.env` 填入有效 Key |
 | WebSocket 连接失败 | 前端代理未配置或后端未启动 | 确保后端运行在 8000 端口，前端 dev server 代理已配置 |
 | 游戏卡在某阶段 | LLM 调用超时或失败 | 检查后端日志，确认 API 可达；使用 `/rerun-action` 重试 |
 | 前端白屏 | 后端未启动或 API 代理问题 | 先启动后端，再启动前端 dev server |

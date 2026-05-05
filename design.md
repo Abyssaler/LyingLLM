@@ -15,100 +15,107 @@
 
 ```
 LyingLLM/
-├── backend/
-│   ├── app/
-│   │   ├── main.py                  # FastAPI 入口
-│   │   ├── config/
-│   │   │   ├── __init__.py
-│   │   │   ├── settings.py          # 全局配置
-│   │   │   └── loader.py            # YAML 加载器
-│   │   ├── core/
-│   │   │   ├── __init__.py
-│   │   │   ├── engine.py            # 游戏引擎：主循环、阶段调度
-│   │   │   ├── state.py             # 游戏状态机
-│   │   │   ├── phase.py             # 阶段定义与转换
-│   │   │   └── event_bus.py          # 事件总线（解耦通信）
-│   │   ├── models/
-│   │   │   ├── __init__.py
-│   │   │   ├── game.py               # 对局模型
-│   │   │   ├── player.py            # 玩家模型
-│   │   │   ├── role.py              # 角色定义模型
-│   │   │   └── event.py             # 事件/日志模型
-│   │   ├── roles/
-│   │   │   ├── __init__.py
-│   │   │   ├── base.py              # 角色基类（含技能接口）
-│   │   │   ├── werewolf.py
-│   │   │   ├── villager.py
-│   │   │   ├── seer.py
-│   │   │   ├── witch.py
-│   │   │   ├── hunter.py
-│   │   │   └── guard.py
-│   │   ├── agents/
-│   │   │   ├── __init__.py
-│   │   │   ├── base.py              # Agent 基类（人格+思维+记忆）
-│   │   │   ├── prompts.py           # Prompt 模板构建器
-│   │   │   ├── parser.py           # 输出解析与校验器
-│   │   │   ├── personality.py       # 人格特质定义
-│   │   │   └── judge.py             # 裁判 AI（MVP 评选）
-│   │   ├── llm/
-│   │   │   ├── __init__.py
-│   │   │   ├── client.py            # LLM 统一调度客户端
-│   │   │   ├── adapter.py           # 多格式适配器（OpenAI/Claude）
-│   │   │   ├── retry.py             # 重试与降级策略
-│   │   │   └── message.py           # 对话历史管理
-│   │   ├── rules/
-│   │   │   ├── __init__.py
-│   │   │   └── manager.py           # 规则管理器
-│   │   ├── memory/
-│   │   │   ├── __init__.py
-│   │   │   └── game_memory.py       # Agent游戏内记忆（公共+私有+阵营）
-│   │   ├── storage/
-│   │   │   ├── __init__.py
-│   │   │   └── game_log.py          # 对局日志持久化
-│   │   └── api/
-│   │       ├── __init__.py
-│   │       ├── game.py              # 对局相关API
-│   │       ├── config.py            # 配置相关API
-│   │       └── ws.py                # WebSocket 实时推送
-│   ├── configs/
-│   │   ├── roles/
-│   │   │   └── classic.yaml         # 经典角色定义
-│   │   ├── rules/
-│   │   │   └── classic.yaml         # 经典规则集
-│   │   └── models/
-│   │       └── providers.yaml       # LLM provider 配置
-│   ├── logs/                         # 对局日志目录
-│   ├── tests/
-│   ├── pyproject.toml
-│   ├── requirements.txt
-│   └── .env.example                 # 环境变量模板
+├── app/
+│   ├── main.py                  # FastAPI 入口
+│   ├── config/
+│   │   ├── __init__.py
+│   │   ├── settings.py          # 全局配置
+│   │   └── loader.py            # YAML 加载器
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── engine.py            # 游戏引擎：主循环、阶段调度
+│   │   ├── state.py             # 游戏状态机
+│   │   ├── phase.py             # 阶段定义与转换
+│   │   └── event_bus.py          # 事件总线（解耦通信）
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── game.py               # 对局模型
+│   │   ├── player.py            # 玩家模型
+│   │   ├── role.py              # 角色定义模型
+│   │   └── event.py             # 事件/日志模型
+│   ├── roles/
+│   │   ├── __init__.py
+│   │   ├── base.py              # 角色基类（含技能接口）
+│   │   ├── werewolf.py
+│   │   ├── villager.py
+│   │   ├── seer.py
+│   │   ├── witch.py
+│   │   ├── hunter.py
+│   │   └── guard.py
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   ├── base.py              # Agent 基类（人格+思维+记忆）
+│   │   ├── prompts.py           # Prompt 模板构建器
+│   │   ├── parser.py            # 输出解析与校验器
+│   │   ├── personality.py       # 人格特质定义
+│   │   └── judge.py             # 裁判 AI（MVP 评选）
+│   ├── llm/
+│   │   ├── __init__.py
+│   │   ├── client.py            # LLM 统一调度客户端
+│   │   ├── adapter.py           # 多格式适配器（OpenAI/Claude）
+│   │   ├── retry.py             # 重试与降级策略
+│   │   └── message.py           # 对话历史管理
+│   ├── rules/
+│   │   ├── __init__.py
+│   │   └── manager.py           # 规则管理器
+│   ├── memory/
+│   │   ├── __init__.py
+│   │   └── game_memory.py       # Agent游戏内记忆（公共+私有+阵营）
+│   ├── storage/
+│   │   ├── __init__.py
+│   │   └── game_log.py          # 对局日志持久化
+│   └── api/
+│       ├── __init__.py
+│       ├── game.py              # 对局相关API
+│       ├── config.py            # 配置相关API
+│       └── ws.py                # WebSocket 实时推送
+├── configs/
+│   ├── roles/
+│   │   └── classic.yaml         # 经典角色定义
+│   ├── rules/
+│   │   └── classic.yaml         # 经典规则集
+│   └── models/
+│       └── providers.yaml       # LLM provider 配置
+├── logs/                         # 对局日志目录
+├── tests/
+├── pyproject.toml
+├── requirements.txt
+├── .env.example                 # 环境变量模板
 ├── frontend/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── PlayerCard.tsx        # 玩家配置卡片
-│   │   │   ├── GameBoard.tsx         # 游戏棋盘
 │   │   │   ├── ChatPanel.tsx         # 发言面板
 │   │   │   ├── VotePanel.tsx         # 投票面板
 │   │   │   ├── ThinkingViewer.tsx    # 思维过程查看器
 │   │   │   ├── NightOverlay.tsx      # 夜间视觉模式遮罩
-│   │   │   └── CenterStage.tsx       # 中间信息展示区
+│   │   │   ├── CenterStage.tsx       # 中间信息展示区
+│   │   │   └── Timeline.tsx          # 事件时间线
 │   │   ├── pages/
 │   │   │   ├── Setup.tsx             # 对局配置页
 │   │   │   ├── Game.tsx              # 对局观看页
 │   │   │   └── History.tsx           # 历史记录页
+│   │   ├── hooks/
+│   │   │   └── useGame.ts            # WebSocket 与自动推进 Hook
 │   │   ├── store/
 │   │   │   └── gameStore.ts          # Zustand 状态管理
 │   │   ├── api/
 │   │   │   └── client.ts             # API + WebSocket 客户端
-│   │   └── App.tsx
+│   │   ├── types/
+│   │   │   └── index.ts              # 前端类型定义
+│   │   ├── App.tsx
+│   │   ├── main.tsx
+│   │   └── index.css
 │   ├── package.json
 │   └── tsconfig.json
-└── README.md
+├── OPERATION_MANUAL.md
+├── DEPLOYMENT_MANUAL.md
+└── design.md
 ```
 
 ## 核心架构
 
-### 1. 游戏引擎 (`core/engine.py`)
+### 1. 游戏引擎 (`app/core/engine.py`)
 
 引擎是整个系统的调度中心，采用**阶段驱动**的异步循环：
 
@@ -164,7 +171,7 @@ class NightActionSet:
 - `private_results`: 预言家查验、女巫用药等只对指定 Agent 可见的结果
 - `public_announcement`: 天亮后对所有存活玩家公开的死亡公告
 
-### 2. 游戏状态机 (`core/state.py`)
+### 2. 游戏状态机 (`app/core/state.py`)
 
 游戏状态机的完整状态转换图：
 
@@ -248,7 +255,7 @@ DAWN → LAST_WORDS(skip/done) → WIN_CHECK ──(no winner after night)──
 - LLM 超时、解析失败或动作非法时进入 `RETRY_OR_FALLBACK`，超过重试上限后使用规则配置的降级动作。
 - `PAUSED` 可从任意运行中状态进入，恢复时回到暂停前状态。
 
-### 3. Agent 系统 (`agents/base.py`)
+### 3. Agent 系统 (`app/agents/base.py`)
 
 每个AI玩家是一个 Agent，核心结构：
 
@@ -293,7 +300,7 @@ Agent
 
 记忆压缩（可选）：当游戏轮次较多、对话历史超出模型上下文窗口时，可启用摘要压缩策略——将早期轮次的详细对话压缩为自然语言摘要，保留关键决策节点，具体策略可在规则配置中开关。
 
-### 4. Prompt 工程 (`agents/prompts.py`)
+### 4. Prompt 工程 (`app/agents/prompts.py`)
 
 Prompt 采用**分层组装**设计：
 
@@ -335,7 +342,7 @@ User Prompt:
 }
 ```
 
-### 5. 角色系统 (`roles/base.py`)
+### 5. 角色系统 (`app/roles/base.py`)
 
 ```python
 class BaseRole:
@@ -353,9 +360,9 @@ class BaseRole:
 
 角色通过继承 `BaseRole` 扩展，新增角色只需实现对应接口，无需改动引擎。其中 `on_death` 用于处理死亡触发型技能（如猎人开枪）。
 
-### 6. LLM 调用层 (`llm/`)
+### 6. LLM 调用层 (`app/llm/`)
 
-#### 6.1 多格式适配器 (`llm/adapter.py`)
+#### 6.1 多格式适配器 (`app/llm/adapter.py`)
 
 采用适配器模式统一不同 LLM 提供商的接口：
 
@@ -379,7 +386,7 @@ class ProviderAdapter(ABC):
 
 > **注意**：`TokenPlanAdapter` 已暂时移除，待 Token Plan 格式稳定后再考虑接入。
 
-#### 6.2 输出解析与校验 (`agents/parser.py`)
+#### 6.2 输出解析与校验 (`app/agents/parser.py`)
 
 模型返回的 JSON 需要经过解析与校验：
 
@@ -398,7 +405,7 @@ class OutputParser:
         # 非法时抛出 ValidationError，触发重试
 ```
 
-#### 6.3 重试与降级策略 (`llm/retry.py`)
+#### 6.3 重试与降级策略 (`app/llm/retry.py`)
 
 ```python
 class RetryPolicy:
@@ -513,7 +520,7 @@ memory_compression:
                    └──────────┘
 ```
 
-### 9. 日志系统 (`storage/game_log.py`)
+### 9. 日志系统 (`app/storage/game_log.py`)
 
 日志采用事件溯源设计：状态变化不只保存最终快照，而是保存每一步事件，方便回放、断点恢复、调试 LLM 输出和后续统计。每局游戏生成一个 JSON 日志文件，内部按可见性拆分为白天日志、夜晚日志和观赛者日志。
 
@@ -610,7 +617,7 @@ memory_compression:
 }
 ```
 
-### 10. 裁判 AI 与 MVP 评选 (`agents/judge.py`)
+### 10. 裁判 AI 与 MVP 评选 (`app/agents/judge.py`)
 
 每局游戏配置一名**裁判 AI**，在游戏结束后自动执行 MVP 评选：
 
@@ -880,7 +887,8 @@ enum GameEventType {
 # Application
 APP_HOST=0.0.0.0
 APP_PORT=8000
-DEBUG=false
+APP_DEBUG=false
+APP_LOG_DIR=./logs
 
 # OpenAI
 OPENAI_API_KEY=sk-xxx
@@ -890,13 +898,14 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 ANTHROPIC_API_KEY=sk-ant-xxx
 ANTHROPIC_BASE_URL=https://api.anthropic.com
 
+# DeepSeek
+DEEPSEEK_API_KEY=xxx
+
 # Custom Providers (OpenAI-compatible)
+# CUSTOM_PROVIDER_1_NAME=custom_1
 CUSTOM_PROVIDER_1_API_KEY=xxx
 CUSTOM_PROVIDER_1_BASE_URL=https://xxx/v1
 CUSTOM_PROVIDER_1_MODEL=xxx
-
-# Log Storage
-LOG_DIR=./logs
 ```
 
 `.env` 文件已添加到 `.gitignore`，确保密钥不会被提交到仓库。

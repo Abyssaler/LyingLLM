@@ -22,10 +22,14 @@ from app.models.event import (
 )
 
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
+
+
 class GameLogStorage:
     def __init__(self, game_id: str, log_dir: str | Path | None = None) -> None:
         self.game_id = game_id
-        self.log_dir = Path(log_dir) if log_dir else Path("./logs")
+        self.log_dir = Path(log_dir) if log_dir else DEFAULT_LOG_DIR
         self._event_counter: int = 0
         self._day_log: list[GameEvent] = []
         self._night_log: list[GameEvent] = []
