@@ -20,6 +20,8 @@ export function createGame(body: {
   rules_config?: string;
   enable_sheriff?: boolean;
   enable_last_words?: boolean;
+  role_assignments?: Record<number, string>;
+  player_models?: Record<number, { provider: string; model_name: string; base_url?: string; api_key?: string }>;
 }) {
   return fetchAPI<GameState>('/games', {
     method: 'POST',
@@ -165,7 +167,10 @@ export class GameWSClient {
       try {
         const data: WSEvent = JSON.parse(event.data);
         if (typeof data.event_id === 'string') {
-          this.lastEventId = parseInt(data.event_id, 10) || 0;
+          const parsed = parseInt(data.event_id, 10);
+          if (!Number.isNaN(parsed) && parsed > 0) {
+            this.lastEventId = parsed;
+          }
         }
         this.emit(data.event_type, data);
         this.emit('*', data);

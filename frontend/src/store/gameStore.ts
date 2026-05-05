@@ -145,8 +145,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     ws.on('*', (data) => {
       if (data.event_id != null) {
+        const parsedEventId = parseInt(String(data.event_id), 10);
         const evt: GameEvent = {
-          event_id: parseInt(String(data.event_id), 10) || 0,
+          event_id: Number.isNaN(parsedEventId) || parsedEventId <= 0
+            ? get().lastEventId + 1
+            : parsedEventId,
           schema_version: '1.0',
           game_id: data.game_id || gameId,
           round: data.round || 0,

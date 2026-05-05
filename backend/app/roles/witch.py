@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from app.models.role import Faction, RoleConfig, SkillDefinition, SkillTargetType
 from app.roles.base import BaseRole, ActionResult, GameContext

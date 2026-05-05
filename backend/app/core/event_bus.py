@@ -60,12 +60,18 @@ class EventBus:
         return event
 
     async def publish_phase_change(
-        self, from_phase: Phase, to_phase: Phase, round: int, data: dict[str, Any] | None = None
+        self,
+        from_phase: Phase | str,
+        to_phase: Phase | str,
+        round: int,
+        data: dict[str, Any] | None = None,
     ) -> Event:
+        from_phase_value = from_phase.value if isinstance(from_phase, Phase) else str(from_phase)
+        to_phase_value = to_phase.value if isinstance(to_phase, Phase) else str(to_phase)
         return await self.publish(
             event_type="phase_change",
-            data={"from_phase": from_phase.value, "to_phase": to_phase.value, **(data or {})},
-            phase=to_phase,
+            data={"from_phase": from_phase_value, "to_phase": to_phase_value, **(data or {})},
+            phase=to_phase if isinstance(to_phase, Phase) else None,
             round=round,
         )
 

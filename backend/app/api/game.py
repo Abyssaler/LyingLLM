@@ -1,21 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Optional
-from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, status
 
 from app.models.game import Game, GameConfig, GameCreateRequest
-from app.models.player import Player, PlayerStatus, LLMConfig
-from app.models.role import Faction
 from app.core.engine import GameEngine
 from app.core.phase import Phase
 from app.core.state import InvalidTransitionError, PhaseMismatchError
-from app.rules.manager import RuleConfig, RuleManager
+from app.rules.manager import RuleManager
 from app.config.loader import YAMLLoader
-from app.storage.game_log import GameLogStorage
-from app.models.event import VoteRecord
+from app.api.ws import create_event_bus_with_ws
 
 router = APIRouter(prefix="/api/games", tags=["games"])
 
@@ -55,6 +50,16 @@ def _game_to_dict(game: Game, engine: GameEngine) -> dict[str, Any]:
     }
 
 
+def _win_check_after_night(engine: GameEngine) -> bool:
+    current_round = engine.state.round
+    for player in engine.game.players:
+        if player.death_round != current_round or not player.death_cause:
+            continue
+        if any(cause in {"wolf_kill", "witch_poison"} for cause in player.death_cause):
+            return True
+    return False
+
+
 @router.post("", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_game(request: GameCreateRequest) -> dict[str, Any]:
     config = GameConfig(
@@ -63,12 +68,20 @@ async def create_game(request: GameCreateRequest) -> dict[str, Any]:
         rules_config=request.rules_config,
         enable_sheriff=request.enable_sheriff,
         enable_last_words=request.enable_last_words,
+        role_assignments=request.role_assignments,
+        player_models=request.player_models,
     )
     game = Game(config=config)
     loader = YAMLLoader()
     rule_manager = RuleManager(loader)
     rules = rule_manager.load(config.rules_config)
-    engine = GameEngine(game=game, rules_config=rules)
+    event_bus = create_event_bus_with_ws(game.game_id)
+    engine = GameEngine(game=game, rules_config=rules, event_bus=event_bus)
+    engine.setup_game(
+        player_count=config.player_count,
+        role_assignments=config.role_assignments,
+        player_models=config.player_models,
+    )
     _games[game.game_id] = engine
     return _game_to_dict(game, engine)
 
@@ -174,26 +187,15 @@ async def step_game(game_id: str, request: StepPhaseRequest = None) -> dict[str,
         if current == Phase.LAST_WORDS:
             dead_ids = engine._pending_deaths
             phase = await engine.run_last_words(dead_ids)
-            engine._pending_deaths = []
             return {"game_id": game_id, "from_phase": current.value, "to_phase": phase.value}
 
         if current == Phase.ON_DEATH_SKILL:
-            dead_ids = [d.player_id for d in engine.log.build_log().night_log
-                        ] if engine._pending_deaths else engine._pending_deaths
             phase = await engine.run_on_death_skill(engine._pending_deaths or [])
             return {"game_id": game_id, "from_phase": current.value, "to_phase": phase.value}
 
         if current == Phase.WIN_CHECK:
-            alive_wolves = engine.game.get_alive_wolves()
-            alive_villagers = engine.game.get_alive_villagers()
-            has_winner = len(alive_wolves) == 0 or len(alive_wolves) >= len(alive_villagers)
-            after_night = engine.state.round > 0
-            if has_winner:
-                winner = "village" if len(alive_wolves) == 0 else "wolf"
-                await engine.end_game(winner)
-                result = await engine.run_win_check(after_night=after_night)
-            else:
-                result = await engine.run_win_check(after_night=after_night)
+            after_night = _win_check_after_night(engine)
+            result = await engine.run_win_check(after_night=after_night)
             return {"game_id": game_id, "from_phase": current.value, "to_phase": result.value,
                     "winner": engine.game.winner}
 
@@ -278,7 +280,10 @@ async def rerun_action(game_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot rerun in current phase")
     try:
         engine.state.enter_retry(reason="rerun_action")
-        engine._publish_phase("RETRY_OR_FALLBACK", engine.state.retry_from.value if engine.state.retry_from else "unknown")
+        await engine._publish_phase(
+            "RETRY_OR_FALLBACK",
+            engine.state.retry_from.value if engine.state.retry_from else "unknown",
+        )
         return {"game_id": game_id, "current_phase": engine.state.current_phase.value}
     except (InvalidTransitionError, PhaseMismatchError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))

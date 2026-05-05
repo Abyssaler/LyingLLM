@@ -26,6 +26,8 @@ class GameCreateRequest(BaseModel):
     rules_config: str = "classic"
     enable_sheriff: bool = True
     enable_last_words: bool = True
+    role_assignments: Optional[dict[int, str]] = None
+    player_models: Optional[dict[int, dict]] = None
 
 
 class Game(BaseModel):

@@ -26,7 +26,7 @@ from app.models.event import (
     VoteSummary,
 )
 from app.models.game import Game
-from app.models.player import PlayerStatus
+from app.models.player import LLMConfig, Player, PlayerStatus
 from app.models.role import Faction
 from app.roles.base import BaseRole, ActionResult, GameContext
 from app.roles import ROLE_REGISTRY, create_role
@@ -66,6 +66,10 @@ class WolfDiscussResult:
     discussion_summary: str = ""
 
 
+def _choose_random_target(candidates: list[int]) -> int | None:
+    return random.choice(candidates) if candidates else None
+
+
 class GameEngine:
     def __init__(
         self,
@@ -88,6 +92,7 @@ class GameEngine:
         self._current_voter_idx: int = 0
         self._tied_ids: list[int] = []
         self._revote_count: int = 0
+        self._day_votes: list[VoteRecord] = []
         self._pending_deaths: list[int] = []
         self._last_guard_target: int | None = None
         self._witch_has_save: dict[int, bool] = {}
@@ -95,6 +100,69 @@ class GameEngine:
         self._wolf_kill_history: list[int] = field(default_factory=list)
         self._adapter_cache: dict[str, ProviderAdapter] = {}
         self.log.set_config(game.config.model_dump())
+
+    def setup_game(
+        self,
+        player_count: int,
+        role_assignments: dict[int, str] | None = None,
+        player_models: dict[int, dict[str, Any]] | None = None,
+    ) -> None:
+        self.game.players = []
+        self.roles.clear()
+        self.agents.clear()
+        self._sheriff_id = None
+        self._pending_deaths = []
+        self._witch_has_save.clear()
+        self._witch_has_poison.clear()
+
+        for player_id in range(1, player_count + 1):
+            llm_config = None
+            if player_models and player_id in player_models:
+                llm_config = LLMConfig(**player_models[player_id])
+            self.game.players.append(
+                Player(
+                    player_id=player_id,
+                    name=f"P{player_id}",
+                    llm_config=llm_config,
+                )
+            )
+
+        assignments = self._generate_role_assignments(player_count)
+        if role_assignments:
+            assignments.update(role_assignments)
+        self.assign_roles(assignments)
+        self.create_agents()
+
+    def _generate_role_assignments(self, player_count: int) -> dict[int, str]:
+        role_pool: list[str] = []
+        remaining = player_count
+
+        for role_key, role_range in self.rules.roles.items():
+            min_count = role_range.get("min", 0)
+            role_pool.extend([role_key] * min_count)
+            remaining -= min_count
+
+        if remaining < 0:
+            raise ValueError(f"Player count {player_count} is smaller than minimum required roles")
+
+        optional_roles: list[str] = []
+        for role_key, role_range in self.rules.roles.items():
+            min_count = role_range.get("min", 0)
+            max_count = role_range.get("max", min_count)
+            optional_roles.extend([role_key] * max(0, max_count - min_count))
+
+        villagers = [role for role in optional_roles if role == "villager"]
+        non_villagers = [role for role in optional_roles if role != "villager"]
+
+        while remaining > 0 and non_villagers:
+            role_pool.append(non_villagers.pop(0))
+            remaining -= 1
+        while remaining > 0:
+            role_pool.append(villagers.pop(0) if villagers else "villager")
+            remaining -= 1
+
+        random.shuffle(role_pool)
+        return {idx + 1: role for idx, role in enumerate(role_pool[:player_count])}
 
     def assign_roles(self, role_assignments: dict[int, str]) -> None:
         for player_id, role_key in role_assignments.items():
@@ -136,7 +204,7 @@ class GameEngine:
                 self._witch_has_poison[player.player_id] = role.has_poison_potion if hasattr(role, "has_poison_potion") else True
 
     async def start_game(self) -> Phase:
-        result = self.state.start_game(enable_sheriff=self.rules.enable_sheriff)
+        result = self.state.start_game(enable_sheriff=self.game.config.enable_sheriff)
         await self.event_bus.publish_phase_change("WAITING", self.state.current_phase.value, self.state.round)
         self.log.add_phase_change_event("WAITING", self.state.current_phase.value, self.state.round)
         return result
@@ -148,25 +216,26 @@ class GameEngine:
 
     async def run_night_phase(self) -> Phase:
         if self.rules.enable_wolf_discuss and self._has_wolves():
-            await self.state.enter_wolf_discuss()
+            self.state.enter_wolf_discuss()
             await self._publish_phase("NIGHT_BEGIN", "WOLF_DISCUSS")
             wolf_result = await self._run_wolf_discuss()
-            await self.state.finish_wolf_discuss()
+            self._night_collector = NightActionCollector(
+                round=self.state.round,
+                wolf_kill_target=wolf_result.target or None,
+                wolf_discuss_votes=wolf_result.votes,
+            )
+            self.state.finish_wolf_discuss()
             await self._publish_phase("WOLF_DISCUSS", "NIGHT_ACTIONS")
         else:
-            await self.state.skip_wolf_discuss()
+            self.state.skip_wolf_discuss()
             await self._publish_phase("NIGHT_BEGIN", "NIGHT_ACTIONS")
 
         await self._collect_night_actions()
-        await self.state.finish_night_actions()
+        self.state.finish_night_actions()
         await self._publish_phase("NIGHT_ACTIONS", "DAWN")
 
         resolution = self._resolve_night()
         return await self._process_dawn(resolution)
-
-    async def _has_wolves(self) -> bool:
-        alive_wolves = [p for p in self.game.get_alive_players() if p.faction == Faction.WOLF]
-        return len(alive_wolves) > 0
 
     def _has_wolves(self) -> bool:
         return len(self.game.get_alive_wolves()) > 0
@@ -212,7 +281,13 @@ class GameEngine:
         return WolfDiscussResult(target=chosen_target, votes=votes)
 
     async def _collect_night_actions(self) -> None:
-        self._night_collector = NightActionCollector(round=self.state.round)
+        existing_wolf_target = self._night_collector.wolf_kill_target if self._night_collector else None
+        existing_wolf_votes = self._night_collector.wolf_discuss_votes if self._night_collector else {}
+        self._night_collector = NightActionCollector(
+            round=self.state.round,
+            wolf_kill_target=existing_wolf_target,
+            wolf_discuss_votes=dict(existing_wolf_votes),
+        )
         alive_players = self.game.get_alive_players()
         night_order = self.rules.night_order
         for role_key in night_order:
@@ -233,7 +308,23 @@ class GameEngine:
                     extra={"self_player_id": pid},
                 )
                 if role_key == "guard":
-                    context.extra["guard_target"] = context.extra.get("guard_target")
+                    guard_targets = [p.player_id for p in alive_players]
+                    last_target = getattr(role, "last_guard_target", None)
+                    if self.rules.guard_cannot_guard_same_twice and last_target is not None:
+                        guard_targets = [target for target in guard_targets if target != last_target]
+                    context.extra["guard_target"] = _choose_random_target(guard_targets)
+                elif role_key == "werewolf":
+                    if context.wolf_kill_target is None:
+                        wolf_targets = [p.player_id for p in alive_players if p.faction != Faction.WOLF]
+                        context.extra["wolf_kill_target"] = _choose_random_target(wolf_targets)
+                    else:
+                        context.extra["wolf_kill_target"] = context.wolf_kill_target
+                elif role_key == "witch":
+                    context.extra["witch_save"] = False
+                    context.extra["witch_poison_target"] = None
+                elif role_key == "seer":
+                    seer_targets = [p.player_id for p in alive_players if p.player_id != pid]
+                    context.extra["seer_check_target"] = _choose_random_target(seer_targets)
                 result = await role.night_action(self.agents.get(pid), context)
                 self._apply_night_action(role_key, pid, result)
 
@@ -286,8 +377,12 @@ class GameEngine:
             if nc.has_witch_save and nc.witch_save_target == wolf_target:
                 if self.rules.witch_save_blocks_wolf_kill:
                     is_protected = True
+                    witch_player_id = next(
+                        (pid for pid, role in self.roles.items() if role.__class__.__name__ == "Witch"),
+                        0,
+                    )
                     private_results.append(PrivateResult(
-                        player_id=nc.witch_save_target or 0,
+                        player_id=witch_player_id,
                         result_type="witch_save",
                         data={"saved_target": wolf_target},
                     ))
@@ -315,8 +410,12 @@ class GameEngine:
         if nc.has_seer_action and nc.seer_check_target is not None:
             target_player = self.game.get_player(nc.seer_check_target)
             is_wolf = target_player.faction == Faction.WOLF if target_player else False
+            seer_player_id = next(
+                (pid for pid, role in self.roles.items() if role.__class__.__name__ == "Seer"),
+                nc.seer_check_target,
+            )
             private_results.append(PrivateResult(
-                player_id=nc.seer_check_target,
+                player_id=seer_player_id,
                 result_type="seer_check",
                 data={"target": nc.seer_check_target, "is_wolf": is_wolf},
             ))
@@ -377,7 +476,7 @@ class GameEngine:
             for d in resolution.deaths
         )
         is_first_night = self.state.round == 1
-        enable_last_words = self.rules.enable_last_words
+        enable_last_words = self.game.config.enable_last_words
         if is_first_night and not self.rules.first_night_has_last_words:
             enable_last_words = False
 
@@ -401,19 +500,24 @@ class GameEngine:
         alive_wolves = self.game.get_alive_wolves()
         alive_villagers = self.game.get_alive_villagers()
         if len(alive_wolves) == 0:
+            self.game.winner = "village"
+            self.log.set_result(self.game.winner, self.state.round)
             return self.state.check_win(has_winner=True, after_night=after_night)
         if len(alive_wolves) >= len(alive_villagers):
+            self.game.winner = "wolf"
+            self.log.set_result(self.game.winner, self.state.round)
             return self.state.check_win(has_winner=True, after_night=after_night)
+        self.game.winner = None
         return self.state.check_win(has_winner=False, after_night=after_night)
 
     async def run_day_phase(self) -> Phase:
-        await self.state.start_discuss()
+        self.state.start_discuss()
         await self._publish_phase("DISCUSS_ORDER", "DISCUSS")
         await self._run_discuss()
-        await self.state.finish_discuss()
+        self.state.finish_discuss()
         await self._publish_phase("DISCUSS", "VOTE")
         await self._run_vote()
-        await self.state.finish_vote()
+        self.state.finish_vote()
         await self._publish_phase("VOTE", "VOTE_RESULT")
         return await self._resolve_vote()
 
@@ -453,15 +557,22 @@ class GameEngine:
     async def _run_vote(self) -> None:
         alive_players = self.game.get_alive_players()
         self._speech_order = sorted([p.player_id for p in alive_players])
+        votes: list[VoteRecord] = []
         for player_id in self._speech_order:
             agent = self.agents.get(player_id)
             if agent and agent.is_alive:
+                candidates = [p.player_id for p in alive_players if p.player_id != player_id]
+                target_id = _choose_random_target(candidates)
+                vote = VoteRecord(voter_id=player_id, target_id=target_id, is_abstain=target_id is None)
+                votes.append(vote)
                 self.log.add_vote_event(
                     phase=f"day_{self.state.round}_vote",
                     round_num=self.state.round,
                     player_id=player_id,
-                    target_id=0,
+                    target_id=target_id,
+                    is_abstain=target_id is None,
                 )
+        self._day_votes = votes
 
     def _count_votes(self, votes: list[VoteRecord]) -> VoteSummary:
         vote_counts: Counter[int] = Counter()
@@ -557,11 +668,15 @@ class GameEngine:
         )
 
     async def _resolve_vote(self) -> Phase:
-        votes: list[VoteRecord] = []
-        alive_players = self.game.get_alive_players()
-        for voter in alive_players:
-            votes.append(VoteRecord(voter_id=voter.player_id, target_id=None, is_abstain=True))
+        votes = list(self._day_votes)
+        if not votes:
+            alive_players = self.game.get_alive_players()
+            for voter in alive_players:
+                candidates = [p.player_id for p in alive_players if p.player_id != voter.player_id]
+                target_id = _choose_random_target(candidates)
+                votes.append(VoteRecord(voter_id=voter.player_id, target_id=target_id, is_abstain=target_id is None))
         summary = self._count_votes(votes)
+        self._day_votes = []
         self.log.add_vote_result_event(
             phase=f"day_{self.state.round}_vote_result",
             round_num=self.state.round,
@@ -594,7 +709,7 @@ class GameEngine:
                     "execute",
                     f"玩家{eliminated_id}号被投票处决",
                 )
-            has_last_words = self.rules.enable_last_words
+            has_last_words = self.game.config.enable_last_words
             has_death_skill = self._player_has_death_skill(eliminated_id)
             return self.state.finish_execute(
                 has_last_words=has_last_words,
@@ -627,7 +742,8 @@ class GameEngine:
             alive_players = self.game.get_alive_players()
             for p in alive_players:
                 if p.player_id not in self._tied_ids:
-                    votes.append(VoteRecord(voter_id=p.player_id, target_id=None))
+                    target_id = _choose_random_target(self._tied_ids)
+                    votes.append(VoteRecord(voter_id=p.player_id, target_id=target_id, is_abstain=target_id is None))
             tie_summary = self._count_votes(votes)
 
             self.state.finish_tie_vote()
@@ -679,7 +795,6 @@ class GameEngine:
         return self.state.finish_last_words(has_death_skill=has_death_skill)
 
     async def run_on_death_skill(self, dead_player_ids: list[int]) -> Phase:
-        self.state.finish_on_death_skill.__func__
         for pid in sorted(dead_player_ids):
             role = self.roles.get(pid)
             player = self.game.get_player(pid)
@@ -739,6 +854,7 @@ class GameEngine:
                         sheriff_transfer=transfer_target,
                     )
 
+        self._pending_deaths = []
         return self.state.finish_on_death_skill()
 
     async def end_game(self, winner: str) -> dict[str, Any]:

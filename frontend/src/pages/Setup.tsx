@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGameStore } from '../store/gameStore';
 import * as api from '../api/client';
-import type { PlayerModelConfig, GameConfig } from '../types';
 
 interface PlayerSetup {
   name: string;
@@ -82,6 +81,16 @@ export default function SetupPage() {
         rules_config: rulesConfig,
         enable_sheriff: enableSheriff,
         enable_last_words: enableLastWords,
+        role_assignments: Object.keys(roleAssignments).length > 0 ? roleAssignments : undefined,
+        player_models: Object.fromEntries(
+          playerSetups.map((player, idx) => [
+            idx + 1,
+            {
+              provider: player.model_provider,
+              model_name: player.model_name,
+            },
+          ])
+        ),
       });
       setGame(game);
       await api.startGame(game.game_id);
