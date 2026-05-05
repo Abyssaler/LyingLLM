@@ -1,3 +1,5 @@
+import type { GameListItem } from "../types";
+
 const BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
 const WS_BASE = import.meta.env.VITE_WS_BASE_URL || "ws://localhost:8000/api/ws/games";
 
@@ -41,6 +43,12 @@ export async function getGame(gameId: string): Promise<any> {
 
 export async function getEvents(gameId: string, afterId = 0): Promise<any[]> {
   const r = await fetch(`${BASE}/games/${gameId}/events?after_id=${afterId}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function listGames(): Promise<GameListItem[]> {
+  const r = await fetch(`${BASE}/games`);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }

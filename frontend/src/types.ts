@@ -32,4 +32,23 @@ export interface GameSummary {
   alive_count: number;
   death_count: number;
   winner: string | null;
+  players?: PlayerInfo[];
+}
+
+export interface PlayerInfo {
+  id: number;
+  role: string;
+  faction: string;
+  alive: boolean;
+  is_sheriff: boolean;
+}
+
+export interface GameListItem {
+  game_id: string;
+  phase: string;
+  round_no: number;
+  alive_count: number;
+  death_count: number;
+  winner: string | null;
+  created_at: string | null;
 }
