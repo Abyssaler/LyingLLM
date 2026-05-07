@@ -17,6 +17,7 @@ node_modules/
 # Project
 mind.txt
 .env
+.claude
 
 # OS
 .DS_Store
